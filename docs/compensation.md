@@ -1,8 +1,8 @@
 # Saga compensation
 
-Phase 6 gives partially completed workflows a durable rollback path. Compensation does not rewind
-the database transaction or promise that the outside world never observed a forward action.
-Instead, each reversible step declares an explicit business action that restores consistency.
+Partially completed workflows have a durable rollback path. Compensation does not rewind the
+database transaction or promise that the outside world never observed a forward action. Instead,
+each reversible step declares an explicit business action that restores consistency.
 
 For the e-commerce workflow, the reversible pairings are:
 

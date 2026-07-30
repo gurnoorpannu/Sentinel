@@ -5,6 +5,34 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildApp } from './app.js';
 
 describe('API health endpoint', () => {
+  it('serves a machine-readable OpenAPI contract', async () => {
+    const app = buildApp({
+      database: { query: vi.fn() },
+      workflows: createWorkflowStore(),
+      logger: false,
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/openapi.json' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      openapi: '3.1.0',
+      info: { title: 'Sentinel API', version: '0.1.0' },
+      paths: {
+        '/workflows': {
+          get: expect.any(Object),
+          post: expect.any(Object),
+        },
+        '/workflows/{workflowId}/operator-actions': {
+          post: {
+            security: [{ operatorBearer: [] }],
+          },
+        },
+      },
+    });
+    await app.close();
+  });
+
   it('reports process liveness without depending on PostgreSQL', async () => {
     const database = { query: vi.fn().mockRejectedValue(new Error('connection refused')) };
     const app = buildApp({ database, workflows: createWorkflowStore(), logger: false });

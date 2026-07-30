@@ -1,8 +1,7 @@
 # Chaos and recovery testing
 
-Phase 8 proves Sentinel's reliability mechanisms under deterministic failure. The harness is
-controlled rather than random so each scenario can be reproduced in CI and explained precisely in
-an interview.
+The chaos harness proves Sentinel's reliability mechanisms under deterministic failure. It is
+controlled rather than random so each scenario can be reproduced in CI and explained precisely.
 
 ## Failure modes
 

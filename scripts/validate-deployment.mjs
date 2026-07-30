@@ -8,6 +8,7 @@ const compose = await read('compose.yaml');
 const kustomization = await read('deploy/kubernetes/kustomization.yaml');
 const dashboardManifest = await read('deploy/kubernetes/dashboard.yaml');
 const secretExample = await read('deploy/kubernetes/secret.example.yaml');
+const releaseWorkflow = await read('.github/workflows/release.yml');
 
 assert(dockerfile.includes('FROM node:22-alpine AS build'), 'Docker build must use Node 22');
 assert(count(dockerfile, 'USER node') === 2, 'Both runtime images must run as the node user');
@@ -30,6 +31,19 @@ assert(
 assert(
   secretExample.includes('OPERATOR_TOKEN:'),
   'Deployment secret example must declare the operator token',
+);
+assert(
+  releaseWorkflow.includes("tags:\n      - 'v*.*.*'"),
+  'Release workflow must use SemVer tags',
+);
+assert(
+  releaseWorkflow.includes('target: service') && releaseWorkflow.includes('target: dashboard'),
+  'Release workflow must publish both runtime images',
+);
+assert(releaseWorkflow.includes('sbom: true'), 'Release images must include SBOM attestations');
+assert(
+  releaseWorkflow.includes('actions/attest-build-provenance@v4'),
+  'Release images must include build provenance',
 );
 
 const resources = [...kustomization.matchAll(/^\s*-\s+([a-z0-9.-]+\.yaml)$/gim)].map(

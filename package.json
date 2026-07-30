@@ -22,8 +22,10 @@
     "typecheck": "npm run build:packages && npm run typecheck -w @sentinel/api && npm run typecheck -w @sentinel/worker && npm run typecheck -w @sentinel/dashboard",
     "db:migrate": "npm run build -w @sentinel/config && npm run build -w @sentinel/database && node packages/database/dist/migrate.js",
     "deployment:check": "node scripts/validate-deployment.mjs",
+    "scripts:check": "node --check scripts/benchmark-worker.mjs && node --check scripts/demo.mjs && node --check scripts/validate-deployment.mjs",
     "benchmark:worker": "npm run build:packages && npm run build -w @sentinel/worker && node scripts/benchmark-worker.mjs",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run deployment:check && npm run build"
+    "demo": "node scripts/demo.mjs",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run scripts:check && npm run deployment:check && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

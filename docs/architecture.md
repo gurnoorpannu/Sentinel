@@ -58,12 +58,12 @@ This decision keeps worker claim queries and state validation straightforward wh
 history to investigate crashes and demonstrate recovery. State and its corresponding event must be
 written in the same PostgreSQL transaction so they cannot diverge.
 
-Phase 8 adds an independent replay verifier. It derives workflow and task states from ordered events,
-checks sequence continuity and the durable event counter, then compares the replay with current
-projections. This is an integrity proof and diagnostic path; workers still use projections for
-normal operation rather than rebuilding state on every restart.
+An independent replay verifier derives workflow and task states from ordered events, checks sequence
+continuity and the durable event counter, then compares the replay with current projections. This is
+an integrity proof and diagnostic path; workers still use projections for normal operation rather
+than rebuilding state on every restart.
 
-## Planned execution path
+## Execution path
 
 ```mermaid
 sequenceDiagram
@@ -97,8 +97,9 @@ sequenceDiagram
 
 These mechanisms are deliberately separate because none can replace the others.
 
-## Phase 1 operational topology
+## Operational topology
 
 Docker Compose starts PostgreSQL, applies migrations once, then starts the API and worker. The
-dashboard starts after the API becomes healthy. Production deployment is outside Phase 1, but every
-component already has an explicit process boundary and health behavior.
+dashboard starts after the API becomes healthy. Production images and Kubernetes manifests preserve
+the same explicit process boundaries, readiness behavior, migration ordering, and external secret
+requirements.
