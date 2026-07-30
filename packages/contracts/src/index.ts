@@ -99,6 +99,30 @@ export interface WorkflowEvent {
   occurredAt: Date;
 }
 
+export interface WorkflowHistoryIssue {
+  code:
+    | 'SEQUENCE_GAP'
+    | 'EVENT_COUNT_MISMATCH'
+    | 'INVALID_WORKFLOW_TRANSITION'
+    | 'INVALID_TASK_TRANSITION'
+    | 'MISSING_TASK_REFERENCE'
+    | 'WORKFLOW_PROJECTION_MISMATCH'
+    | 'TASK_PROJECTION_MISMATCH';
+  message: string;
+  sequence?: number;
+  taskId?: string;
+}
+
+export interface WorkflowHistoryReport {
+  workflowId: string;
+  valid: boolean;
+  eventCount: number;
+  latestSequence: number;
+  replayedWorkflowStatus: WorkflowStatus;
+  replayedTaskStatuses: Array<{ taskId: string; status: TaskStatus }>;
+  issues: WorkflowHistoryIssue[];
+}
+
 export interface WorkflowDetail {
   workflow: Workflow;
   tasks: Task[];

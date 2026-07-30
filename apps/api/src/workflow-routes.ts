@@ -10,7 +10,7 @@ import { z, ZodError } from 'zod';
 
 export type WorkflowStore = Pick<
   WorkflowRepository,
-  'createWorkflow' | 'getWorkflow' | 'listWorkflows'
+  'createWorkflow' | 'getWorkflow' | 'listWorkflows' | 'verifyWorkflowHistory'
 >;
 
 const jsonObjectSchema = z.record(z.string(), z.json());
@@ -157,6 +157,30 @@ export function registerWorkflowRoutes(app: FastifyInstance, workflows: Workflow
     }
 
     return serializeWorkflowDetail(detail);
+  });
+
+  app.get('/workflows/:workflowId/history-integrity', async (request, reply) => {
+    const parsedParameters = workflowParametersSchema.safeParse(request.params);
+    if (!parsedParameters.success) {
+      return reply.status(400).send({
+        error: {
+          code: 'INVALID_WORKFLOW_ID',
+          message: 'workflowId must be a UUID',
+        },
+      });
+    }
+
+    const report = await workflows.verifyWorkflowHistory(parsedParameters.data.workflowId);
+    if (!report) {
+      return reply.status(404).send({
+        error: {
+          code: 'WORKFLOW_NOT_FOUND',
+          message: 'Workflow not found',
+        },
+      });
+    }
+
+    return report;
   });
 }
 

@@ -212,6 +212,39 @@ describe('workflow endpoints', () => {
     });
     await app.close();
   });
+
+  it('returns the event-history integrity report for a workflow', async () => {
+    const detail = createWorkflowDetail();
+    const workflows = createWorkflowStore(detail);
+    workflows.verifyWorkflowHistory.mockResolvedValue({
+      workflowId: detail.workflow.id,
+      valid: true,
+      eventCount: 1,
+      latestSequence: 1,
+      replayedWorkflowStatus: 'pending',
+      replayedTaskStatuses: detail.tasks.map(({ id, status }) => ({ taskId: id, status })),
+      issues: [],
+    });
+    const app = buildApp({
+      database: { query: vi.fn().mockResolvedValue({}) },
+      workflows,
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/workflows/${detail.workflow.id}/history-integrity`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      workflowId: detail.workflow.id,
+      valid: true,
+      latestSequence: 1,
+      issues: [],
+    });
+    await app.close();
+  });
 });
 
 function createWorkflowStore(detail: WorkflowDetail | null = null) {
@@ -219,6 +252,7 @@ function createWorkflowStore(detail: WorkflowDetail | null = null) {
     createWorkflow: vi.fn().mockResolvedValue(detail ?? createWorkflowDetail()),
     getWorkflow: vi.fn().mockResolvedValue(detail),
     listWorkflows: vi.fn().mockResolvedValue([]),
+    verifyWorkflowHistory: vi.fn().mockResolvedValue(null),
   };
 }
 
