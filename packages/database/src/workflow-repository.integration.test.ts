@@ -83,6 +83,39 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
     ).resolves.toBeNull();
   });
 
+  it('lists recent workflows with dashboard task counts and status filtering', async () => {
+    const running = await repository.createWorkflow({
+      name: 'Running order',
+      steps: [{ name: 'Validate' }, { name: 'Charge' }],
+    });
+    const pending = await repository.createWorkflow({
+      name: 'Pending order',
+      steps: [{ name: 'Validate' }, { name: 'Charge' }],
+    });
+    await repository.claimTask({
+      workerId: 'dashboard-test',
+      leaseDurationMs: 30_000,
+    });
+
+    const all = await repository.listWorkflows();
+    expect(all).toHaveLength(2);
+    expect(all.find(({ workflow }) => workflow.id === pending.workflow.id)).toMatchObject({
+      taskCount: 2,
+      completedTaskCount: 0,
+      activeTaskCount: 1,
+      failedTaskCount: 0,
+    });
+    expect(all.find(({ workflow }) => workflow.id === running.workflow.id)).toMatchObject({
+      workflow: { status: 'running' },
+      taskCount: 2,
+      activeTaskCount: 1,
+    });
+
+    const runningOnly = await repository.listWorkflows({ status: 'running', limit: 10 });
+    expect(runningOnly).toHaveLength(1);
+    expect(runningOnly[0]?.workflow.id).toBe(running.workflow.id);
+  });
+
   it('rejects invalid transitions without changing state or appending an event', async () => {
     const created = await repository.createWorkflow({
       name: 'Transition test',

@@ -1,9 +1,17 @@
-import type { CreateWorkflowInput, WorkflowDetail } from '@sentinel/contracts';
+import {
+  workflowStatuses,
+  type CreateWorkflowInput,
+  type WorkflowDetail,
+  type WorkflowSummary,
+} from '@sentinel/contracts';
 import { InvalidWorkflowDefinitionError, type WorkflowRepository } from '@sentinel/database';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z, ZodError } from 'zod';
 
-export type WorkflowStore = Pick<WorkflowRepository, 'createWorkflow' | 'getWorkflow'>;
+export type WorkflowStore = Pick<
+  WorkflowRepository,
+  'createWorkflow' | 'getWorkflow' | 'listWorkflows'
+>;
 
 const jsonObjectSchema = z.record(z.string(), z.json());
 
@@ -34,6 +42,11 @@ const workflowParametersSchema = z.object({
   workflowId: z.uuid(),
 });
 
+const listWorkflowsQuerySchema = z.object({
+  status: z.enum(workflowStatuses).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
 const ecommerceWorkflowSchema = z.object({
   orderId: z.string().trim().min(1).max(120),
   customerEmail: z.email(),
@@ -51,6 +64,24 @@ const ecommerceWorkflowSchema = z.object({
 });
 
 export function registerWorkflowRoutes(app: FastifyInstance, workflows: WorkflowStore): void {
+  app.get('/workflows', async (request, reply) => {
+    const query = listWorkflowsQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return reply.status(400).send({
+        error: {
+          code: 'INVALID_WORKFLOW_QUERY',
+          message: 'Workflow filters are invalid',
+          details: query.error.issues,
+        },
+      });
+    }
+
+    const summaries = await workflows.listWorkflows(query.data);
+    return {
+      workflows: summaries.map(serializeWorkflowSummary),
+    };
+  });
+
   app.post('/workflows/ecommerce', async (request, reply) => {
     try {
       const order = ecommerceWorkflowSchema.parse(request.body);
@@ -154,6 +185,13 @@ function serializeWorkflowDetail(detail: WorkflowDetail) {
     workflow: serializeDates(detail.workflow),
     tasks: detail.tasks.map(serializeDates),
     events: detail.events.map(serializeDates),
+  };
+}
+
+function serializeWorkflowSummary(summary: WorkflowSummary) {
+  return {
+    ...summary,
+    workflow: serializeDates(summary.workflow),
   };
 }
 

@@ -154,6 +154,43 @@ describe('workflow endpoints', () => {
     await app.close();
   });
 
+  it('lists workflow summaries for the operations dashboard', async () => {
+    const detail = createWorkflowDetail();
+    const workflows = createWorkflowStore(detail);
+    workflows.listWorkflows.mockResolvedValue([
+      {
+        workflow: detail.workflow,
+        taskCount: 2,
+        completedTaskCount: 0,
+        activeTaskCount: 1,
+        failedTaskCount: 0,
+      },
+    ]);
+    const app = buildApp({
+      database: { query: vi.fn().mockResolvedValue({}) },
+      workflows,
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/workflows?status=pending&limit=20',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      workflows: [
+        {
+          workflow: { id: detail.workflow.id, status: 'pending' },
+          taskCount: 2,
+          activeTaskCount: 1,
+        },
+      ],
+    });
+    expect(workflows.listWorkflows).toHaveBeenCalledWith({ status: 'pending', limit: 20 });
+    await app.close();
+  });
+
   it('returns 404 for a missing workflow', async () => {
     const app = buildApp({
       database: { query: vi.fn().mockResolvedValue({}) },
@@ -181,6 +218,7 @@ function createWorkflowStore(detail: WorkflowDetail | null = null) {
   return {
     createWorkflow: vi.fn().mockResolvedValue(detail ?? createWorkflowDetail()),
     getWorkflow: vi.fn().mockResolvedValue(detail),
+    listWorkflows: vi.fn().mockResolvedValue([]),
   };
 }
 

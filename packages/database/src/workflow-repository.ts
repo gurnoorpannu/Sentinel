@@ -6,12 +6,14 @@ import {
   type FailTaskInput,
   type JsonObject,
   type JsonValue,
+  type ListWorkflowsInput,
   type RenewLeaseInput,
   type Task,
   type TaskStatus,
   type Workflow,
   type WorkflowDetail,
   type WorkflowEvent,
+  type WorkflowSummary,
   type WorkflowStatus,
 } from '@sentinel/contracts';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
@@ -26,6 +28,13 @@ interface WorkflowRow extends QueryResultRow {
   updated_at: Date;
   started_at: Date | null;
   completed_at: Date | null;
+}
+
+interface WorkflowSummaryRow extends WorkflowRow {
+  task_count: string;
+  completed_task_count: string;
+  active_task_count: string;
+  failed_task_count: string;
 }
 
 interface TaskRow extends QueryResultRow {
@@ -95,6 +104,40 @@ export class InvalidStateTransitionError extends Error {
 
 export class WorkflowRepository {
   constructor(private readonly pool: Pool) {}
+
+  async listWorkflows(input: ListWorkflowsInput = {}): Promise<WorkflowSummary[]> {
+    const limit = input.limit ?? 50;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new RangeError('limit must be an integer between 1 and 100');
+    }
+
+    const result = await this.pool.query<WorkflowSummaryRow>(
+      `
+        SELECT
+          w.id, w.name, w.status, w.payload, w.version, w.created_at, w.updated_at,
+          w.started_at, w.completed_at,
+          count(t.id)::text AS task_count,
+          count(t.id) FILTER (
+            WHERE t.status IN ('completed', 'compensated')
+          )::text AS completed_task_count,
+          count(t.id) FILTER (
+            WHERE t.status IN ('ready', 'leased', 'retry_scheduled', 'compensating')
+          )::text AS active_task_count,
+          count(t.id) FILTER (
+            WHERE t.status IN ('failed', 'compensation_failed')
+          )::text AS failed_task_count
+        FROM workflows w
+        LEFT JOIN tasks t ON t.workflow_id = w.id
+        WHERE ($1::text IS NULL OR w.status = $1)
+        GROUP BY w.id
+        ORDER BY w.updated_at DESC, w.created_at DESC
+        LIMIT $2
+      `,
+      [input.status ?? null, limit],
+    );
+
+    return result.rows.map(mapWorkflowSummary);
+  }
 
   async createWorkflow(input: CreateWorkflowInput): Promise<WorkflowDetail> {
     validateDefinition(input);
@@ -1001,6 +1044,16 @@ function mapWorkflow(row: WorkflowRow): Workflow {
     updatedAt: row.updated_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
+  };
+}
+
+function mapWorkflowSummary(row: WorkflowSummaryRow): WorkflowSummary {
+  return {
+    workflow: mapWorkflow(row),
+    taskCount: Number(row.task_count),
+    completedTaskCount: Number(row.completed_task_count),
+    activeTaskCount: Number(row.active_task_count),
+    failedTaskCount: Number(row.failed_task_count),
   };
 }
 

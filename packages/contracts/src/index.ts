@@ -54,6 +54,19 @@ export interface Workflow {
   completedAt: Date | null;
 }
 
+export interface WorkflowSummary {
+  workflow: Workflow;
+  taskCount: number;
+  completedTaskCount: number;
+  activeTaskCount: number;
+  failedTaskCount: number;
+}
+
+export interface ListWorkflowsInput {
+  status?: WorkflowStatus | undefined;
+  limit?: number;
+}
+
 export interface Task {
   id: string;
   workflowId: string;
