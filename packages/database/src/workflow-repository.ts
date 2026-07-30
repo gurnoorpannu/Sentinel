@@ -1,8 +1,12 @@
 import {
   canTransitionWorkflow,
+  type ClaimTaskInput,
+  type CompleteTaskInput,
   type CreateWorkflowInput,
+  type FailTaskInput,
   type JsonObject,
   type JsonValue,
+  type RenewLeaseInput,
   type Task,
   type TaskStatus,
   type Workflow,
@@ -55,6 +59,12 @@ interface EventRow extends QueryResultRow {
 
 interface StatusRow extends QueryResultRow {
   status: WorkflowStatus;
+}
+
+interface CandidateTaskRow extends QueryResultRow {
+  id: string;
+  workflow_id: string;
+  status: TaskStatus;
 }
 
 export class InvalidWorkflowDefinitionError extends Error {
@@ -221,7 +231,256 @@ export class WorkflowRepository {
       client.release();
     }
   }
+
+  async claimTask({ workerId, leaseDurationMs }: ClaimTaskInput): Promise<Task | null> {
+    validateLeaseSettings(workerId, leaseDurationMs);
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      const candidateResult = await client.query<CandidateTaskRow>(
+        `
+          SELECT t.id, t.workflow_id, t.status
+          FROM tasks t
+          INNER JOIN workflows w ON w.id = t.workflow_id
+          WHERE
+            w.status IN ('pending', 'running')
+            AND t.attempt_count < t.max_attempts
+            AND (
+              t.status = 'ready'
+              OR (
+                t.status = 'leased'
+                AND t.lease_expires_at <= now()
+              )
+            )
+          ORDER BY t.created_at, t.workflow_id, t.step_number
+          FOR UPDATE OF t SKIP LOCKED
+          LIMIT 1
+        `,
+      );
+      const candidate = candidateResult.rows[0];
+
+      if (!candidate) {
+        await client.query('COMMIT');
+        return null;
+      }
+
+      const workflowStarted = await client.query(
+        `
+          UPDATE workflows
+          SET
+            status = 'running',
+            version = version + 1,
+            updated_at = now(),
+            started_at = COALESCE(started_at, now())
+          WHERE id = $1 AND status = 'pending'
+        `,
+        [candidate.workflow_id],
+      );
+
+      if (workflowStarted.rowCount === 1) {
+        await appendEvent(client, {
+          workflowId: candidate.workflow_id,
+          eventType: 'workflow.status_changed',
+          data: { from: 'pending', to: 'running' },
+        });
+      }
+
+      const taskResult = await client.query<TaskRow>(
+        `
+          UPDATE tasks
+          SET
+            status = 'leased',
+            lease_owner = $2,
+            lease_expires_at = now() + ($3 * interval '1 millisecond'),
+            generation = generation + 1,
+            attempt_count = attempt_count + 1,
+            updated_at = now()
+          WHERE id = $1
+          RETURNING ${taskColumns}
+        `,
+        [candidate.id, workerId, leaseDurationMs],
+      );
+      const task = requireFirstRow(taskResult.rows, 'Claimed task could not be reloaded');
+
+      await appendEvent(client, {
+        workflowId: task.workflow_id,
+        taskId: task.id,
+        eventType: candidate.status === 'leased' ? 'task.reclaimed' : 'task.leased',
+        data: {
+          workerId,
+          generation: Number(task.generation),
+          leaseExpiresAt: task.lease_expires_at?.toISOString() ?? null,
+        },
+      });
+
+      await client.query('COMMIT');
+      return mapTask(task);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async renewLease({
+    taskId,
+    workerId,
+    generation,
+    leaseDurationMs,
+  }: RenewLeaseInput): Promise<Task | null> {
+    validateLeaseSettings(workerId, leaseDurationMs);
+    validateGeneration(generation);
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      const taskResult = await client.query<TaskRow>(
+        `
+          UPDATE tasks
+          SET
+            lease_expires_at = now() + ($4 * interval '1 millisecond'),
+            updated_at = now()
+          WHERE
+            id = $1
+            AND status = 'leased'
+            AND lease_owner = $2
+            AND generation = $3
+            AND lease_expires_at > now()
+          RETURNING ${taskColumns}
+        `,
+        [taskId, workerId, generation, leaseDurationMs],
+      );
+      const task = taskResult.rows[0];
+
+      if (!task) {
+        await client.query('COMMIT');
+        return null;
+      }
+
+      await appendEvent(client, {
+        workflowId: task.workflow_id,
+        taskId: task.id,
+        eventType: 'task.lease_renewed',
+        data: {
+          workerId,
+          generation,
+          leaseExpiresAt: task.lease_expires_at?.toISOString() ?? null,
+        },
+      });
+
+      await client.query('COMMIT');
+      return mapTask(task);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async completeTask({
+    taskId,
+    workerId,
+    generation,
+    result,
+  }: CompleteTaskInput): Promise<Task | null> {
+    return await this.settleTask({
+      taskId,
+      workerId,
+      generation,
+      status: 'completed',
+      result,
+      eventType: 'task.completed',
+    });
+  }
+
+  async failTask({ taskId, workerId, generation, error }: FailTaskInput): Promise<Task | null> {
+    return await this.settleTask({
+      taskId,
+      workerId,
+      generation,
+      status: 'failed',
+      result: { error },
+      eventType: 'task.failed',
+    });
+  }
+
+  private async settleTask(input: {
+    taskId: string;
+    workerId: string;
+    generation: number;
+    status: 'completed' | 'failed';
+    result: JsonValue;
+    eventType: 'task.completed' | 'task.failed';
+  }): Promise<Task | null> {
+    validateWorkerId(input.workerId);
+    validateGeneration(input.generation);
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      const taskResult = await client.query<TaskRow>(
+        `
+          UPDATE tasks
+          SET
+            status = $4,
+            result = $5::jsonb,
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = now(),
+            completed_at = now()
+          WHERE
+            id = $1
+            AND status = 'leased'
+            AND lease_owner = $2
+            AND generation = $3
+            AND lease_expires_at > now()
+          RETURNING ${taskColumns}
+        `,
+        [
+          input.taskId,
+          input.workerId,
+          input.generation,
+          input.status,
+          JSON.stringify(input.result),
+        ],
+      );
+      const task = taskResult.rows[0];
+
+      if (!task) {
+        await client.query('COMMIT');
+        return null;
+      }
+
+      await appendEvent(client, {
+        workflowId: task.workflow_id,
+        taskId: task.id,
+        eventType: input.eventType,
+        data: {
+          workerId: input.workerId,
+          generation: input.generation,
+          result: input.result,
+        },
+      });
+
+      await client.query('COMMIT');
+      return mapTask(task);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 }
+
+const taskColumns = `
+  id, workflow_id, step_number, name, status, payload, result,
+  max_attempts, attempt_count, lease_owner, lease_expires_at,
+  generation, next_attempt_at, created_at, updated_at, completed_at
+`;
 
 function validateDefinition(input: CreateWorkflowInput): void {
   const workflowName = input.name.trim();
@@ -247,6 +506,25 @@ function validateDefinition(input: CreateWorkflowInput): void {
         `Step ${index + 1} maxAttempts must be an integer between 1 and 100`,
       );
     }
+  }
+}
+
+function validateLeaseSettings(workerId: string, leaseDurationMs: number): void {
+  validateWorkerId(workerId);
+  if (!Number.isInteger(leaseDurationMs) || leaseDurationMs < 100 || leaseDurationMs > 3_600_000) {
+    throw new RangeError('leaseDurationMs must be an integer between 100 and 3600000');
+  }
+}
+
+function validateWorkerId(workerId: string): void {
+  if (workerId.trim().length === 0 || workerId.length > 200) {
+    throw new RangeError('workerId must contain 1 to 200 characters');
+  }
+}
+
+function validateGeneration(generation: number): void {
+  if (!Number.isSafeInteger(generation) || generation < 1) {
+    throw new RangeError('generation must be a positive safe integer');
   }
 }
 

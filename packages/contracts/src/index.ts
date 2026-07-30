@@ -87,6 +87,29 @@ export interface WorkflowDetail {
   events: WorkflowEvent[];
 }
 
+export interface ClaimTaskInput {
+  workerId: string;
+  leaseDurationMs: number;
+}
+
+export interface LeaseIdentity {
+  taskId: string;
+  workerId: string;
+  generation: number;
+}
+
+export interface RenewLeaseInput extends LeaseIdentity {
+  leaseDurationMs: number;
+}
+
+export interface CompleteTaskInput extends LeaseIdentity {
+  result: JsonValue;
+}
+
+export interface FailTaskInput extends LeaseIdentity {
+  error: JsonObject;
+}
+
 export const workflowTransitions: Readonly<Record<WorkflowStatus, readonly WorkflowStatus[]>> = {
   pending: ['running'],
   running: ['completed', 'compensating', 'failed'],

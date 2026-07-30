@@ -62,6 +62,8 @@ services:
       <<: *app-environment
       WORKER_ID: worker-compose-1
       WORKER_POLL_INTERVAL_MS: 1000
+      LEASE_DURATION_MS: 30000
+      HEARTBEAT_INTERVAL_MS: 10000
 
   dashboard:
     <<: *app

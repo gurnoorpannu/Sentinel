@@ -145,4 +145,199 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
     );
     expect(Number(counts.rows[0]?.count)).toBe(0);
   });
+
+  it('allows only one worker to claim a ready task', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Atomic claim test',
+      steps: [{ name: 'Claim me' }],
+    });
+
+    const claims = await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        repository.claimTask({
+          workerId: `worker-${index + 1}`,
+          leaseDurationMs: 30_000,
+        }),
+      ),
+    );
+    const successfulClaims = claims.filter((claim) => claim !== null);
+
+    expect(successfulClaims).toHaveLength(1);
+    expect(successfulClaims[0]).toMatchObject({
+      workflowId: created.workflow.id,
+      status: 'leased',
+      generation: 1,
+      attemptCount: 1,
+    });
+
+    const reloaded = await repository.getWorkflow(created.workflow.id);
+    expect(reloaded?.workflow).toMatchObject({ status: 'running', version: 2 });
+    expect(reloaded?.events.map(({ eventType }) => eventType)).toContain('task.leased');
+  });
+
+  it('renews only the current unexpired lease identity', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Heartbeat test',
+      steps: [{ name: 'Long task' }],
+    });
+    const claimed = await repository.claimTask({
+      workerId: 'worker-a',
+      leaseDurationMs: 1_000,
+    });
+    expect(claimed).not.toBeNull();
+
+    const renewed = await repository.renewLease({
+      taskId: claimed!.id,
+      workerId: 'worker-a',
+      generation: claimed!.generation,
+      leaseDurationMs: 30_000,
+    });
+
+    expect(renewed?.leaseExpiresAt?.getTime()).toBeGreaterThan(claimed!.leaseExpiresAt!.getTime());
+    await expect(
+      repository.renewLease({
+        taskId: claimed!.id,
+        workerId: 'worker-b',
+        generation: claimed!.generation,
+        leaseDurationMs: 30_000,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      repository.renewLease({
+        taskId: claimed!.id,
+        workerId: 'worker-a',
+        generation: claimed!.generation + 1,
+        leaseDurationMs: 30_000,
+      }),
+    ).resolves.toBeNull();
+
+    const reloaded = await repository.getWorkflow(created.workflow.id);
+    expect(reloaded?.events.at(-1)?.eventType).toBe('task.lease_renewed');
+  });
+
+  it('rejects an expired worker before another generation is claimed', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Expired lease test',
+      steps: [{ name: 'Expire me' }],
+    });
+    const claimed = await repository.claimTask({
+      workerId: 'worker-a',
+      leaseDurationMs: 30_000,
+    });
+    expect(claimed).not.toBeNull();
+
+    await pool.query(
+      "UPDATE tasks SET lease_expires_at = now() - interval '1 second' WHERE id = $1",
+      [claimed!.id],
+    );
+
+    await expect(
+      repository.completeTask({
+        taskId: claimed!.id,
+        workerId: 'worker-a',
+        generation: claimed!.generation,
+        result: { outcome: 'too late' },
+      }),
+    ).resolves.toBeNull();
+
+    const reloaded = await repository.getWorkflow(created.workflow.id);
+    expect(reloaded?.tasks[0]?.status).toBe('leased');
+    expect(reloaded?.events.some(({ eventType }) => eventType === 'task.completed')).toBe(false);
+  });
+
+  it('fences a stale worker after an expired task is reclaimed', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Generation fencing test',
+      steps: [{ name: 'Fence me' }],
+    });
+    const workerA = await repository.claimTask({
+      workerId: 'worker-a',
+      leaseDurationMs: 30_000,
+    });
+    expect(workerA).not.toBeNull();
+
+    await pool.query(
+      "UPDATE tasks SET lease_expires_at = now() - interval '1 second' WHERE id = $1",
+      [workerA!.id],
+    );
+
+    const workerB = await repository.claimTask({
+      workerId: 'worker-b',
+      leaseDurationMs: 30_000,
+    });
+    expect(workerB).toMatchObject({
+      id: workerA!.id,
+      leaseOwner: 'worker-b',
+      generation: 2,
+      attemptCount: 2,
+    });
+
+    await expect(
+      repository.completeTask({
+        taskId: workerA!.id,
+        workerId: 'worker-a',
+        generation: workerA!.generation,
+        result: { outcome: 'stale' },
+      }),
+    ).resolves.toBeNull();
+
+    const completed = await repository.completeTask({
+      taskId: workerB!.id,
+      workerId: 'worker-b',
+      generation: workerB!.generation,
+      result: { outcome: 'accepted' },
+    });
+    expect(completed).toMatchObject({
+      status: 'completed',
+      result: { outcome: 'accepted' },
+      generation: 2,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
+
+    const reloaded = await repository.getWorkflow(created.workflow.id);
+    expect(reloaded?.events.map(({ eventType }) => eventType)).toEqual(
+      expect.arrayContaining(['task.leased', 'task.reclaimed', 'task.completed']),
+    );
+    expect(reloaded?.events.filter(({ eventType }) => eventType === 'task.completed')).toHaveLength(
+      1,
+    );
+  });
+
+  it('applies failure through the same lease fence', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Fenced failure test',
+      steps: [{ name: 'Fail me' }],
+    });
+    const claimed = await repository.claimTask({
+      workerId: 'worker-a',
+      leaseDurationMs: 30_000,
+    });
+    expect(claimed).not.toBeNull();
+
+    const failed = await repository.failTask({
+      taskId: claimed!.id,
+      workerId: 'worker-a',
+      generation: claimed!.generation,
+      error: { code: 'DEMO_FAILURE', retryable: false },
+    });
+
+    expect(failed).toMatchObject({
+      status: 'failed',
+      result: {
+        error: { code: 'DEMO_FAILURE', retryable: false },
+      },
+    });
+    await expect(
+      repository.completeTask({
+        taskId: claimed!.id,
+        workerId: 'worker-a',
+        generation: claimed!.generation,
+        result: { outcome: 'late completion' },
+      }),
+    ).resolves.toBeNull();
+
+    const reloaded = await repository.getWorkflow(created.workflow.id);
+    expect(reloaded?.events.at(-1)?.eventType).toBe('task.failed');
+  });
 });
