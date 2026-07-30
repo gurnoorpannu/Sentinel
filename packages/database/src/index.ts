@@ -9,6 +9,10 @@ export {
 } from './workflow-repository.js';
 export { runMigrations } from './migrations.js';
 export { IdempotencyConflictError, IdempotencyRepository } from './idempotency-repository.js';
+export {
+  WorkerPresenceRepository,
+  type ReportWorkerPresenceInput,
+} from './worker-presence-repository.js';
 export { verifyWorkflowHistory } from './workflow-history.js';
 
 export function createDatabasePool(

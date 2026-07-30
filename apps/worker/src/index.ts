@@ -1,6 +1,11 @@
 import { loadEnvironment } from '@sentinel/config';
 import type { Task } from '@sentinel/contracts';
-import { createDatabasePool, IdempotencyRepository, WorkflowRepository } from '@sentinel/database';
+import {
+  createDatabasePool,
+  IdempotencyRepository,
+  WorkerPresenceRepository,
+  WorkflowRepository,
+} from '@sentinel/database';
 
 import { runBoundedWorker } from './bounded-worker.js';
 import { createDefaultHandlerRegistry } from './ecommerce-handlers.js';
@@ -12,14 +17,20 @@ import {
 } from './failure-injection.js';
 import { executeLeasedTask } from './lease-executor.js';
 import { RetryableTaskError } from './retry-policy.js';
+import { maintainWorkerPresence } from './worker-presence.js';
 
 const environment = loadEnvironment();
 const database = createDatabasePool(environment.DATABASE_URL, {
   maxConnections: environment.DATABASE_POOL_MAX,
 });
 const repository = new WorkflowRepository(database);
+const workerPresence = new WorkerPresenceRepository(database);
 const idempotency = new IdempotencyRepository(database);
 const handlers = createDefaultHandlerRegistry(idempotency);
+const workerStartedAt = new Date();
+const presenceController = new AbortController();
+let presencePromise: Promise<void> | null = null;
+let inFlight = 0;
 let stopping = false;
 let shutdownTimer: NodeJS.Timeout | null = null;
 
@@ -66,6 +77,9 @@ async function workerLoop(): Promise<void> {
       process.stderr.write(
         `[${environment.WORKER_ID}] Unexpected failure while executing ${task.id}: ${String(error)}\n`,
       );
+    },
+    onInFlightChange: (value) => {
+      inFlight = value;
     },
   });
 }
@@ -121,6 +135,22 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 try {
   await verifyDatabaseConnection();
+  presencePromise = maintainWorkerPresence({
+    repository: workerPresence,
+    intervalMs: environment.WORKER_HEARTBEAT_INTERVAL_MS,
+    signal: presenceController.signal,
+    snapshot: () => ({
+      workerId: environment.WORKER_ID,
+      concurrency: environment.WORKER_CONCURRENCY,
+      inFlight,
+      startedAt: workerStartedAt,
+    }),
+    onError: (error) => {
+      process.stderr.write(
+        `[${environment.WORKER_ID}] Worker presence heartbeat failed: ${String(error)}\n`,
+      );
+    },
+  });
   await workerLoop();
 } catch (error) {
   process.stderr.write(`[${environment.WORKER_ID}] Worker failed: ${String(error)}\n`);
@@ -129,5 +159,7 @@ try {
   if (shutdownTimer) {
     clearTimeout(shutdownTimer);
   }
+  presenceController.abort();
+  await presencePromise;
   await database.end();
 }

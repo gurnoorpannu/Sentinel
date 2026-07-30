@@ -28,7 +28,7 @@ const readinessQuery = `
     AND EXISTS (
       SELECT 1
       FROM schema_migrations
-      WHERE name = '006_operator_controls.sql'
+      WHERE name = '007_worker_capacity.sql'
     ) AS schema_ready
 `;
 

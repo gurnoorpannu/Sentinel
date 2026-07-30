@@ -19,6 +19,7 @@ const environmentSchema = z
     SHUTDOWN_GRACE_PERIOD_MS: z.coerce.number().int().min(1_000).default(30_000),
     WORKER_ID: z.string().min(1).default('worker-local'),
     WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
+    WORKER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(10_000).default(5_000),
     WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(1000),
     LEASE_DURATION_MS: z.coerce.number().int().min(100).default(30_000),
     HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(50).default(10_000),

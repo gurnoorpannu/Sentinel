@@ -26,6 +26,63 @@ const operationalMetricsQuery = `
     (SELECT count(*) FROM tasks WHERE status = 'compensating') AS tasks_compensating,
     (SELECT count(*) FROM tasks WHERE status = 'leased' AND lease_expires_at <= now())
       AS tasks_expired_leases,
+    (
+      SELECT count(*)
+      FROM tasks
+      WHERE
+        status IN ('ready', 'compensating')
+        OR (status = 'retry_scheduled' AND next_attempt_at <= now())
+        OR (status = 'leased' AND lease_expires_at <= now())
+    ) AS tasks_claimable,
+    (
+      SELECT COALESCE(
+        max(
+          EXTRACT(
+            EPOCH FROM (
+              now() - CASE
+                WHEN status = 'retry_scheduled' THEN next_attempt_at
+                WHEN status = 'leased' THEN lease_expires_at
+                WHEN status = 'compensating' THEN updated_at
+                ELSE created_at
+              END
+            )
+          )
+        ),
+        0
+      )
+      FROM tasks
+      WHERE
+        status IN ('ready', 'compensating')
+        OR (status = 'retry_scheduled' AND next_attempt_at <= now())
+        OR (status = 'leased' AND lease_expires_at <= now())
+    ) AS oldest_claimable_age_seconds,
+    (
+      SELECT count(*)::double precision / 300
+      FROM tasks
+      WHERE
+        status IN ('completed', 'compensated')
+        AND completed_at >= now() - interval '5 minutes'
+    ) AS task_completion_rate,
+    (
+      SELECT count(*)
+      FROM worker_heartbeats
+      WHERE updated_at >= now() - interval '30 seconds' AND NOT stopping
+    ) AS workers_active,
+    (
+      SELECT COALESCE(sum(concurrency), 0)
+      FROM worker_heartbeats
+      WHERE updated_at >= now() - interval '30 seconds' AND NOT stopping
+    ) AS worker_capacity,
+    (
+      SELECT COALESCE(sum(in_flight), 0)
+      FROM worker_heartbeats
+      WHERE updated_at >= now() - interval '30 seconds' AND NOT stopping
+    ) AS worker_in_flight,
+    (
+      SELECT count(*)
+      FROM worker_heartbeats
+      WHERE updated_at >= now() - interval '30 seconds' AND stopping
+    ) AS workers_draining,
     (SELECT count(*) FROM workflow_events) AS workflow_events_total,
     (SELECT count(*) FROM idempotency_records) AS idempotency_records_total
 `;
@@ -100,6 +157,27 @@ export class ApiMetrics {
       '# HELP sentinel_expired_leases Tasks whose worker lease has expired.',
       '# TYPE sentinel_expired_leases gauge',
       `sentinel_expired_leases ${numeric(row, 'tasks_expired_leases')}`,
+      '# HELP sentinel_claimable_tasks Tasks currently eligible for a worker claim.',
+      '# TYPE sentinel_claimable_tasks gauge',
+      `sentinel_claimable_tasks ${numeric(row, 'tasks_claimable')}`,
+      '# HELP sentinel_oldest_claimable_task_age_seconds Age of the oldest eligible task.',
+      '# TYPE sentinel_oldest_claimable_task_age_seconds gauge',
+      `sentinel_oldest_claimable_task_age_seconds ${numeric(row, 'oldest_claimable_age_seconds')}`,
+      '# HELP sentinel_task_completion_rate Recent task completions per second over five minutes.',
+      '# TYPE sentinel_task_completion_rate gauge',
+      `sentinel_task_completion_rate ${numeric(row, 'task_completion_rate')}`,
+      '# HELP sentinel_workers Active worker processes with a fresh presence heartbeat.',
+      '# TYPE sentinel_workers gauge',
+      `sentinel_workers ${numeric(row, 'workers_active')}`,
+      '# HELP sentinel_worker_capacity Total execution slots across active workers.',
+      '# TYPE sentinel_worker_capacity gauge',
+      `sentinel_worker_capacity ${numeric(row, 'worker_capacity')}`,
+      '# HELP sentinel_worker_in_flight Execution slots currently occupied.',
+      '# TYPE sentinel_worker_in_flight gauge',
+      `sentinel_worker_in_flight ${numeric(row, 'worker_in_flight')}`,
+      '# HELP sentinel_workers_draining Worker processes reporting graceful shutdown.',
+      '# TYPE sentinel_workers_draining gauge',
+      `sentinel_workers_draining ${numeric(row, 'workers_draining')}`,
       '# HELP sentinel_workflow_events_total Durable workflow events stored.',
       '# TYPE sentinel_workflow_events_total gauge',
       `sentinel_workflow_events_total ${numeric(row, 'workflow_events_total')}`,

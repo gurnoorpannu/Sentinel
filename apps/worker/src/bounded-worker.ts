@@ -19,6 +19,7 @@ interface RunBoundedWorkerOptions {
   onClaim?: (task: Task, inFlight: number) => void;
   onOutcome?: (task: Task, outcome: LeaseExecutionOutcome, inFlight: number) => void;
   onError?: (task: Task, error: unknown) => void;
+  onInFlightChange?: (inFlight: number) => void;
   wait?: (milliseconds: number) => Promise<void>;
 }
 
@@ -34,6 +35,7 @@ export async function runBoundedWorker({
   onClaim,
   onOutcome,
   onError,
+  onInFlightChange,
   wait = async (milliseconds) => await delay(milliseconds),
 }: RunBoundedWorkerOptions): Promise<void> {
   const inFlight = new Set<Promise<void>>();
@@ -62,8 +64,10 @@ export async function runBoundedWorker({
           requestStop('fatal');
         });
       inFlight.add(execution);
+      onInFlightChange?.(inFlight.size);
       void execution.then(() => {
         inFlight.delete(execution);
+        onInFlightChange?.(inFlight.size);
       });
       onClaim?.(task, inFlight.size);
     }

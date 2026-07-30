@@ -6,6 +6,7 @@ import {
   IdempotencyConflictError,
   IdempotencyRepository,
   type Pool,
+  WorkerPresenceRepository,
 } from './index.js';
 import { runMigrations } from './migrations.js';
 import {
@@ -22,6 +23,7 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
   let pool: Pool;
   let repository: WorkflowRepository;
   let idempotency: IdempotencyRepository;
+  let workerPresence: WorkerPresenceRepository;
 
   beforeAll(async () => {
     if (!testDatabaseUrl) {
@@ -32,11 +34,12 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
     pool = createDatabasePool(testDatabaseUrl);
     repository = new WorkflowRepository(pool);
     idempotency = new IdempotencyRepository(pool);
+    workerPresence = new WorkerPresenceRepository(pool);
   });
 
   beforeEach(async () => {
     await pool.query(
-      'TRUNCATE idempotency_records, operator_actions, workflow_events, tasks, workflows RESTART IDENTITY CASCADE',
+      'TRUNCATE idempotency_records, operator_actions, worker_heartbeats, workflow_events, tasks, workflows RESTART IDENTITY CASCADE',
     );
   });
 
@@ -86,6 +89,41 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
     await expect(
       repository.getWorkflow('00000000-0000-4000-8000-000000000099'),
     ).resolves.toBeNull();
+  });
+
+  it('upserts bounded worker capacity without duplicating process identity', async () => {
+    const startedAt = new Date('2026-07-30T00:00:00.000Z');
+    await workerPresence.report({
+      workerId: 'worker-capacity-1',
+      concurrency: 4,
+      inFlight: 2,
+      stopping: false,
+      startedAt,
+    });
+    await workerPresence.report({
+      workerId: 'worker-capacity-1',
+      concurrency: 4,
+      inFlight: 3,
+      stopping: true,
+      startedAt,
+    });
+
+    const result = await pool.query<{
+      worker_id: string;
+      concurrency: number;
+      in_flight: number;
+      stopping: boolean;
+      started_at: Date;
+    }>('SELECT worker_id, concurrency, in_flight, stopping, started_at FROM worker_heartbeats');
+    expect(result.rows).toEqual([
+      {
+        worker_id: 'worker-capacity-1',
+        concurrency: 4,
+        in_flight: 3,
+        stopping: true,
+        started_at: startedAt,
+      },
+    ]);
   });
 
   it('lists recent workflows with dashboard task counts and status filtering', async () => {

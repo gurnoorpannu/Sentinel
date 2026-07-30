@@ -115,6 +115,13 @@ describe('API health endpoint', () => {
             tasks_retry_scheduled: '0',
             tasks_compensating: '0',
             tasks_expired_leases: '0',
+            tasks_claimable: '2',
+            oldest_claimable_age_seconds: '4.5',
+            task_completion_rate: '1.25',
+            workers_active: '2',
+            worker_capacity: '8',
+            worker_in_flight: '6',
+            workers_draining: '1',
             workflow_events_total: '12',
             idempotency_records_total: '2',
           },
@@ -143,6 +150,9 @@ describe('API health endpoint', () => {
       'sentinel_api_requests_total{method="GET",route="/live",status="200"} 1',
     );
     expect(response.body).toContain('sentinel_workflows{status="running"} 1');
+    expect(response.body).toContain('sentinel_worker_capacity 8');
+    expect(response.body).toContain('sentinel_worker_in_flight 6');
+    expect(response.body).toContain('sentinel_oldest_claimable_task_age_seconds 4.5');
     expect(response.body).toContain('sentinel_workflow_events_total 12');
     await app.close();
   });

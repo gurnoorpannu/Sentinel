@@ -10,6 +10,7 @@ describe('worker lease configuration', () => {
     expect(environment.HEARTBEAT_INTERVAL_MS).toBe(10_000);
     expect(environment.SHUTDOWN_GRACE_PERIOD_MS).toBe(30_000);
     expect(environment.WORKER_CONCURRENCY).toBe(4);
+    expect(environment.WORKER_HEARTBEAT_INTERVAL_MS).toBe(5_000);
     expect(environment.DATABASE_POOL_MAX).toBe(10);
   });
 
