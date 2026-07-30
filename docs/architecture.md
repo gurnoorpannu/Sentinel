@@ -45,8 +45,9 @@ transaction as each operational state change.
 
 ### Dashboard
 
-The dashboard visualizes workflows, attempts, leases, events, retries, and compensation. Phase 1
-contains its application shell; operational views arrive in Phase 7.
+The dashboard visualizes workflows, attempts, leases, events, retries, and compensation. Its
+same-origin server routes proxy the control-plane API so browsers do not depend on internal service
+addresses.
 
 ## Source-of-truth decision
 

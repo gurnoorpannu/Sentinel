@@ -33,7 +33,8 @@ The worker ownership protocol is explained in
 [leasing and generation fencing](docs/leasing.md). Ordered execution is described in
 [sequential orchestration](docs/orchestration.md). Failure recovery is covered in
 [retries and idempotency](docs/retries-and-idempotency.md), while partial rollback is detailed in
-[saga compensation](docs/compensation.md).
+[saga compensation](docs/compensation.md). The operator experience is covered in
+[the dashboard guide](docs/dashboard.md).
 
 ## Repository structure
 
@@ -122,9 +123,8 @@ npm run dev
 
 ## Current milestone
 
-Phase 6 provides durable reverse-order saga compensation. A permanent forward failure moves the
-workflow into `compensating`, then leases each completed reversible step in reverse order. The
-e-commerce workflow releases reserved inventory before refunding payment; both effects have
-operation-specific idempotency keys and use the normal lease, generation fence, retry policy, and
-event history. PostgreSQL integration tests cover successful rollback, delayed retries, exhausted
-compensation, and end-to-end compensator execution.
+Phase 7 provides a responsive operations dashboard backed by live Sentinel projections. Operators
+can scan workflow health, filter and search recent executions, inspect progress and failures, then
+drill into every durable step, attempt, generation, worker lease, scheduled retry, compensation,
+recorded result, payload field, and audit event. Same-origin dashboard proxies keep service topology
+out of the browser, while loading, empty, missing-workflow, and API-failure states remain explicit.
