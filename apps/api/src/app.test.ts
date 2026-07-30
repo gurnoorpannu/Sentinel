@@ -89,6 +89,43 @@ describe('workflow endpoints', () => {
     await app.close();
   });
 
+  it('creates the four-step e-commerce workflow', async () => {
+    const detail = createWorkflowDetail();
+    const workflows = createWorkflowStore(detail);
+    const app = buildApp({
+      database: { query: vi.fn().mockResolvedValue({}) },
+      workflows,
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workflows/ecommerce',
+      payload: {
+        orderId: 'order-42',
+        customerEmail: 'buyer@example.com',
+        totalCents: 1299,
+        currency: 'usd',
+        items: [{ sku: 'sentinel-shirt', quantity: 1 }],
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(workflows.createWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Order order-42',
+        payload: expect.objectContaining({ currency: 'USD' }),
+        steps: [
+          expect.objectContaining({ handler: 'validate-order' }),
+          expect.objectContaining({ handler: 'charge-payment' }),
+          expect.objectContaining({ handler: 'reserve-inventory' }),
+          expect.objectContaining({ handler: 'send-confirmation' }),
+        ],
+      }),
+    );
+    await app.close();
+  });
+
   it('returns a workflow with ordered tasks and events', async () => {
     const detail = createWorkflowDetail();
     const workflows = createWorkflowStore(detail);
@@ -163,6 +200,7 @@ function createWorkflowDetail(): WorkflowDetail {
         workflowId,
         stepNumber: 1,
         name: 'Validate order',
+        handler: 'validate-order',
         status: 'ready',
         payload: {},
         result: null,
@@ -181,6 +219,7 @@ function createWorkflowDetail(): WorkflowDetail {
         workflowId,
         stepNumber: 2,
         name: 'Charge payment',
+        handler: 'charge-payment',
         status: 'blocked',
         payload: {},
         result: null,

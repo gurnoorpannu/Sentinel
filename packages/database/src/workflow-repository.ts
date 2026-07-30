@@ -33,6 +33,7 @@ interface TaskRow extends QueryResultRow {
   workflow_id: string;
   step_number: number;
   name: string;
+  handler: string;
   status: TaskStatus;
   payload: JsonObject;
   result: JsonValue | null;
@@ -65,6 +66,12 @@ interface CandidateTaskRow extends QueryResultRow {
   id: string;
   workflow_id: string;
   status: TaskStatus;
+}
+
+interface NextTaskRow extends QueryResultRow {
+  id: string;
+  status: TaskStatus;
+  step_number: number;
 }
 
 export class InvalidWorkflowDefinitionError extends Error {
@@ -119,11 +126,11 @@ export class WorkflowRepository {
         const taskResult = await client.query<TaskRow>(
           `
             INSERT INTO tasks (
-              workflow_id, step_number, name, status, payload, max_attempts
+              workflow_id, step_number, name, handler, status, payload, max_attempts
             )
-            VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
             RETURNING
-              id, workflow_id, step_number, name, status, payload, result,
+              id, workflow_id, step_number, name, handler, status, payload, result,
               max_attempts, attempt_count, lease_owner, lease_expires_at,
               generation, next_attempt_at, created_at, updated_at, completed_at
           `,
@@ -131,6 +138,7 @@ export class WorkflowRepository {
             workflow.id,
             index + 1,
             step.name.trim(),
+            step.handler ?? 'noop',
             index === 0 ? 'ready' : 'blocked',
             JSON.stringify(step.payload ?? {}),
             step.maxAttempts ?? 5,
@@ -465,6 +473,10 @@ export class WorkflowRepository {
         },
       });
 
+      if (input.status === 'completed') {
+        await advanceWorkflow(client, task);
+      }
+
       await client.query('COMMIT');
       return mapTask(task);
     } catch (error) {
@@ -477,7 +489,7 @@ export class WorkflowRepository {
 }
 
 const taskColumns = `
-  id, workflow_id, step_number, name, status, payload, result,
+  id, workflow_id, step_number, name, handler, status, payload, result,
   max_attempts, attempt_count, lease_owner, lease_expires_at,
   generation, next_attempt_at, created_at, updated_at, completed_at
 `;
@@ -506,6 +518,13 @@ function validateDefinition(input: CreateWorkflowInput): void {
         `Step ${index + 1} maxAttempts must be an integer between 1 and 100`,
       );
     }
+
+    const handler = step.handler ?? 'noop';
+    if (!/^[a-z][a-z0-9._-]{0,119}$/.test(handler)) {
+      throw new InvalidWorkflowDefinitionError(
+        `Step ${index + 1} handler must be a lowercase handler identifier`,
+      );
+    }
   }
 }
 
@@ -526,6 +545,68 @@ function validateGeneration(generation: number): void {
   if (!Number.isSafeInteger(generation) || generation < 1) {
     throw new RangeError('generation must be a positive safe integer');
   }
+}
+
+async function advanceWorkflow(client: PoolClient, completedTask: TaskRow): Promise<void> {
+  const nextTaskResult = await client.query<NextTaskRow>(
+    `
+      SELECT id, status, step_number
+      FROM tasks
+      WHERE workflow_id = $1 AND step_number = $2
+      FOR UPDATE
+    `,
+    [completedTask.workflow_id, completedTask.step_number + 1],
+  );
+  const nextTask = nextTaskResult.rows[0];
+
+  if (nextTask) {
+    const activated = await client.query(
+      `
+        UPDATE tasks
+        SET status = 'ready', updated_at = now()
+        WHERE id = $1 AND status = 'blocked'
+      `,
+      [nextTask.id],
+    );
+    if (activated.rowCount !== 1) {
+      throw new Error(
+        `Cannot activate task ${nextTask.id} from unexpected status ${nextTask.status}`,
+      );
+    }
+
+    await appendEvent(client, {
+      workflowId: completedTask.workflow_id,
+      taskId: nextTask.id,
+      eventType: 'task.ready',
+      data: {
+        stepNumber: nextTask.step_number,
+        previousTaskId: completedTask.id,
+      },
+    });
+    return;
+  }
+
+  const completedWorkflow = await client.query(
+    `
+      UPDATE workflows
+      SET
+        status = 'completed',
+        version = version + 1,
+        updated_at = now(),
+        completed_at = now()
+      WHERE id = $1 AND status = 'running'
+    `,
+    [completedTask.workflow_id],
+  );
+  if (completedWorkflow.rowCount !== 1) {
+    throw new Error(`Workflow ${completedTask.workflow_id} was not running at final completion`);
+  }
+
+  await appendEvent(client, {
+    workflowId: completedTask.workflow_id,
+    eventType: 'workflow.status_changed',
+    data: { from: 'running', to: 'completed' },
+  });
 }
 
 interface AppendEventInput {
@@ -584,7 +665,7 @@ async function getWorkflowWithClient(
     client.query<TaskRow>(
       `
         SELECT
-          id, workflow_id, step_number, name, status, payload, result,
+          id, workflow_id, step_number, name, handler, status, payload, result,
           max_attempts, attempt_count, lease_owner, lease_expires_at,
           generation, next_attempt_at, created_at, updated_at, completed_at
         FROM tasks
@@ -632,6 +713,7 @@ function mapTask(row: TaskRow): Task {
     workflowId: row.workflow_id,
     stepNumber: row.step_number,
     name: row.name,
+    handler: row.handler,
     status: row.status,
     payload: row.payload,
     result: row.result,

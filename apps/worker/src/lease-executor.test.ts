@@ -126,6 +126,7 @@ function createLeasedTask(): Task {
     workflowId: '00000000-0000-4000-8000-000000000010',
     stepNumber: 1,
     name: 'Charge payment',
+    handler: 'charge-payment',
     status: 'leased',
     payload: { orderId: 'order-42' },
     result: null,
