@@ -77,7 +77,7 @@ const chaosWorkflowSchema = ecommerceWorkflowSchema.extend({
 export function registerWorkflowRoutes(
   app: FastifyInstance,
   workflows: WorkflowStore,
-  options: { chaosEnabled?: boolean } = {},
+  options: { chaosEnabled?: boolean; operatorToken?: string | undefined } = {},
 ): void {
   app.get('/workflows', async (request, reply) => {
     const query = listWorkflowsQuerySchema.safeParse(request.query);

@@ -31,4 +31,11 @@ describe('worker lease configuration', () => {
       'long-enough-token',
     );
   });
+
+  it('requires a strong operator token when operator controls are enabled', () => {
+    expect(() => loadEnvironment({ OPERATOR_TOKEN: 'too-short' })).toThrow();
+    expect(
+      loadEnvironment({ OPERATOR_TOKEN: 'sentinel-operator-token-with-32-chars' }).OPERATOR_TOKEN,
+    ).toBe('sentinel-operator-token-with-32-chars');
+  });
 });

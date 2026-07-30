@@ -28,6 +28,7 @@ const environmentSchema = z
       .default('false')
       .transform((value) => value === 'true'),
     METRICS_TOKEN: z.string().min(16).optional(),
+    OPERATOR_TOKEN: z.string().min(32).optional(),
   })
   .superRefine((environment, context) => {
     if (environment.HEARTBEAT_INTERVAL_MS >= environment.LEASE_DURATION_MS) {

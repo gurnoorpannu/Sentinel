@@ -16,6 +16,7 @@ interface BuildAppOptions {
   requestTimeoutMs?: number;
   keepAliveTimeoutMs?: number;
   metricsToken?: string | undefined;
+  operatorToken?: string | undefined;
 }
 
 const readinessQuery = `
@@ -40,6 +41,7 @@ export function buildApp({
   requestTimeoutMs = 30_000,
   keepAliveTimeoutMs = 72_000,
   metricsToken,
+  operatorToken,
 }: BuildAppOptions): FastifyInstance {
   const app = Fastify({
     logger,
@@ -143,7 +145,7 @@ export function buildApp({
     });
   }
 
-  registerWorkflowRoutes(app, workflows, { chaosEnabled });
+  registerWorkflowRoutes(app, workflows, { chaosEnabled, operatorToken });
 
   return app;
 }
