@@ -100,3 +100,10 @@ This ledger attributes every accepted manual command to a workflow, stable opera
 reason, expected projection version, and resulting version. Its row is inserted in the same
 transaction as the projection changes and `operator.action_applied` event. Optimistic concurrency
 and state preconditions are checked before any ledger or workflow write occurs.
+
+### `worker_heartbeats`
+
+Each worker process owns one presence row containing its stable ID, start time, configured execution
+slots, occupied slots, draining state, and last update. The row is operational presence rather than
+task ownership: task leases and generation fences remain authoritative. Stale rows are retained for
+diagnostics but excluded from active-capacity metrics after 30 seconds.

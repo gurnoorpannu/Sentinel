@@ -37,7 +37,8 @@ The worker ownership protocol is explained in
 [the dashboard guide](docs/dashboard.md), and the reliability proof is documented in
 [chaos and recovery testing](docs/chaos-testing.md). Production operations are covered by
 [the deployment and operations runbook](docs/production.md), including
-[authenticated operator recovery](docs/operator-controls.md).
+[authenticated operator recovery](docs/operator-controls.md) and
+[scalability and capacity testing](docs/scalability.md).
 
 ## Repository structure
 

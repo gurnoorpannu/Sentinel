@@ -18,6 +18,11 @@ assert(
 assert(compose.includes('read_only: true'), 'Compose application containers must be read-only');
 assert(compose.includes('no-new-privileges:true'), 'Compose must prevent privilege escalation');
 assert(compose.includes('cap_drop:\n    - ALL'), 'Compose must drop Linux capabilities');
+assert(compose.includes('WORKER_CONCURRENCY:'), 'Compose must bound worker execution concurrency');
+assert(
+  compose.includes('DATABASE_POOL_MAX:'),
+  'Compose must configure bounded PostgreSQL connection pools',
+);
 assert(
   dashboardManifest.includes('key: OPERATOR_TOKEN'),
   'Dashboard must receive the server-only operator token from a Secret',

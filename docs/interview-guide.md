@@ -8,8 +8,8 @@
 - Proved crash recovery with failure-injected PostgreSQL integration tests covering stale-worker
   fencing, payment deduplication, retry exhaustion, compensation, and event-history replay.
 - Shipped a responsive operations dashboard plus production-ready non-root containers, Kubernetes
-  probes/resources/security controls, Prometheus metrics, audited operator recovery, and CI
-  container smoke tests.
+  probes/resources/security controls, Prometheus capacity metrics, bounded concurrent workers,
+  audited operator recovery, and reproducible PostgreSQL benchmarks.
 
 ## Two-minute explanation
 
@@ -80,4 +80,5 @@ Keep leasing, generation fencing, and idempotency separate:
 - What happens if PostgreSQL fails during a handler call?
 - How do additive migrations preserve rollback compatibility?
 - Which metrics would drive worker autoscaling?
+- How do database-pool limits create backpressure inside each worker?
 - Why are operator retries version-checked and generation-fenced?

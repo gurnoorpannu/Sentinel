@@ -51,8 +51,10 @@ The Prometheus text response includes:
 - workflows by durable status;
 - ready, leased, retry-scheduled, and compensating tasks;
 - expired leases;
-- total workflow events; and
-- durable idempotency records.
+- total workflow events and durable idempotency records;
+- active/draining workers, execution-slot capacity, and occupied slots;
+- claimable queue depth and oldest eligible-task age; and
+- the five-minute task completion rate.
 
 Recommended initial alerts:
 
@@ -63,6 +65,9 @@ Recommended initial alerts:
 | `sentinel_workflows{status="failed"}`              | Sustained increase above normal baseline   |
 | API 5xx request rate                               | More than 2% for 5 minutes                 |
 | Ready API replicas                                 | Fewer than the required availability floor |
+| Oldest claimable task age                          | Above the workflow latency objective       |
+| Worker saturation                                  | Above 85% with a growing claimable queue   |
+| Fresh worker capacity                              | Zero while claimable tasks exist           |
 
 ## Operator recovery
 
@@ -119,7 +124,9 @@ stateless. Worker replicas coordinate only through PostgreSQL row locks, leases,
 fences, so scaling workers horizontally does not require partition ownership.
 
 Scale based on queue age and ready-task count rather than CPU alone. Keep PostgreSQL connection
-limits in mind: each Sentinel process can open up to 10 pooled connections.
+limits in mind. `DATABASE_POOL_MAX` must reserve two connections beyond `WORKER_CONCURRENCY`, and
+the sum of every replica's pool must remain inside the database connection budget. See
+[scalability and capacity](scalability.md) for metrics, tuning order, and the benchmark.
 
 For an application rollback, restore the previous immutable image tag. Database migrations are
 forward-only; do not roll them back automatically. Additive schema changes should remain compatible
