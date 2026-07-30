@@ -31,6 +31,7 @@ export type JsonObject = { [key: string]: JsonValue };
 export interface WorkflowStepDefinition {
   name: string;
   handler?: string;
+  compensationHandler?: string;
   payload?: JsonObject;
   maxAttempts?: number;
 }
@@ -59,6 +60,8 @@ export interface Task {
   stepNumber: number;
   name: string;
   handler: string;
+  compensationHandler: string | null;
+  executionMode: 'forward' | 'compensation';
   status: TaskStatus;
   payload: JsonObject;
   result: JsonValue | null;

@@ -47,6 +47,8 @@ function createTask(): Task {
     stepNumber: 1,
     name: 'Order task',
     handler: 'noop',
+    compensationHandler: null,
+    executionMode: 'forward',
     status: 'leased',
     payload: {
       orderId: 'order-42',

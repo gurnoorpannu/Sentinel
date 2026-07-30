@@ -160,6 +160,8 @@ function createLeasedTask(): Task {
     stepNumber: 1,
     name: 'Charge payment',
     handler: 'charge-payment',
+    compensationHandler: 'refund-payment',
+    executionMode: 'forward',
     status: 'leased',
     payload: { orderId: 'order-42' },
     result: null,

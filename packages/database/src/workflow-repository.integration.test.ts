@@ -408,6 +408,197 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
     );
   });
 
+  it('compensates completed steps in reverse order after a forward failure', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Compensated order',
+      steps: [
+        { name: 'Validate order', handler: 'validate-order' },
+        {
+          name: 'Charge payment',
+          handler: 'charge-payment',
+          compensationHandler: 'refund-payment',
+        },
+        {
+          name: 'Reserve inventory',
+          handler: 'reserve-inventory',
+          compensationHandler: 'release-inventory',
+        },
+        { name: 'Send confirmation', handler: 'send-confirmation' },
+      ],
+    });
+
+    for (let stepNumber = 1; stepNumber <= 3; stepNumber += 1) {
+      const task = await repository.claimTask({
+        workerId: `forward-${stepNumber}`,
+        leaseDurationMs: 30_000,
+      });
+      expect(task?.stepNumber).toBe(stepNumber);
+      await repository.completeTask({
+        taskId: task!.id,
+        workerId: `forward-${stepNumber}`,
+        generation: task!.generation,
+        result: { stepNumber },
+      });
+    }
+
+    const confirmation = await repository.claimTask({
+      workerId: 'forward-4',
+      leaseDurationMs: 30_000,
+    });
+    await repository.failTask({
+      taskId: confirmation!.id,
+      workerId: 'forward-4',
+      generation: confirmation!.generation,
+      error: { code: 'EMAIL_REJECTED' },
+      retryable: false,
+      retryDelayMs: 0,
+    });
+
+    const inventory = await repository.claimTask({
+      workerId: 'compensator-1',
+      leaseDurationMs: 30_000,
+    });
+    expect(inventory).toMatchObject({
+      stepNumber: 3,
+      compensationHandler: 'release-inventory',
+      executionMode: 'compensation',
+      status: 'leased',
+      attemptCount: 1,
+    });
+    await repository.completeTask({
+      taskId: inventory!.id,
+      workerId: 'compensator-1',
+      generation: inventory!.generation,
+      result: { releaseId: 'release-order-42' },
+    });
+
+    const payment = await repository.claimTask({
+      workerId: 'compensator-2',
+      leaseDurationMs: 30_000,
+    });
+    expect(payment).toMatchObject({
+      stepNumber: 2,
+      compensationHandler: 'refund-payment',
+      executionMode: 'compensation',
+      status: 'leased',
+      attemptCount: 1,
+    });
+    await repository.completeTask({
+      taskId: payment!.id,
+      workerId: 'compensator-2',
+      generation: payment!.generation,
+      result: { refundId: 'refund-order-42' },
+    });
+
+    const reloaded = await repository.getWorkflow(created.workflow.id);
+    expect(reloaded?.workflow.status).toBe('compensated');
+    expect(reloaded?.tasks.map(({ status }) => status)).toEqual([
+      'completed',
+      'compensated',
+      'compensated',
+      'failed',
+    ]);
+    expect(
+      reloaded?.events
+        .filter(({ eventType }) => eventType === 'task.compensation_ready')
+        .map(({ data }) => data.stepNumber),
+    ).toEqual([3, 2]);
+    expect(reloaded?.events.at(-1)).toMatchObject({
+      eventType: 'workflow.status_changed',
+      data: { from: 'compensating', to: 'compensated' },
+    });
+  });
+
+  it('retries compensation and marks the workflow when compensation is exhausted', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Failed compensation',
+      steps: [
+        {
+          name: 'Charge payment',
+          handler: 'charge-payment',
+          compensationHandler: 'refund-payment',
+          maxAttempts: 2,
+        },
+        { name: 'Send confirmation', handler: 'send-confirmation' },
+      ],
+    });
+    const payment = await repository.claimTask({
+      workerId: 'forward-1',
+      leaseDurationMs: 30_000,
+    });
+    await repository.completeTask({
+      taskId: payment!.id,
+      workerId: 'forward-1',
+      generation: payment!.generation,
+      result: { chargeId: 'charge-order-42' },
+    });
+    const confirmation = await repository.claimTask({
+      workerId: 'forward-2',
+      leaseDurationMs: 30_000,
+    });
+    await repository.failTask({
+      taskId: confirmation!.id,
+      workerId: 'forward-2',
+      generation: confirmation!.generation,
+      error: { code: 'EMAIL_REJECTED' },
+      retryable: false,
+      retryDelayMs: 0,
+    });
+
+    const firstRefund = await repository.claimTask({
+      workerId: 'compensator-1',
+      leaseDurationMs: 30_000,
+    });
+    const retry = await repository.failTask({
+      taskId: firstRefund!.id,
+      workerId: 'compensator-1',
+      generation: firstRefund!.generation,
+      error: { code: 'PAYMENT_TIMEOUT' },
+      retryable: true,
+      retryDelayMs: 60_000,
+    });
+    expect(retry).toMatchObject({
+      status: 'retry_scheduled',
+      executionMode: 'compensation',
+      attemptCount: 1,
+    });
+
+    await pool.query(
+      "UPDATE tasks SET next_attempt_at = now() - interval '1 second' WHERE id = $1",
+      [firstRefund!.id],
+    );
+    const secondRefund = await repository.claimTask({
+      workerId: 'compensator-2',
+      leaseDurationMs: 30_000,
+    });
+    expect(secondRefund).toMatchObject({
+      id: firstRefund!.id,
+      executionMode: 'compensation',
+      generation: 2,
+      attemptCount: 2,
+    });
+    const exhausted = await repository.failTask({
+      taskId: secondRefund!.id,
+      workerId: 'compensator-2',
+      generation: secondRefund!.generation,
+      error: { code: 'PAYMENT_TIMEOUT' },
+      retryable: true,
+      retryDelayMs: 120_000,
+    });
+    expect(exhausted?.status).toBe('compensation_failed');
+
+    const reloaded = await repository.getWorkflow(created.workflow.id);
+    expect(reloaded?.workflow.status).toBe('compensation_failed');
+    expect(reloaded?.events.map(({ eventType }) => eventType)).toEqual(
+      expect.arrayContaining([
+        'task.compensation_leased',
+        'task.retry_scheduled',
+        'task.compensation_retried',
+        'task.compensation_failed',
+      ]),
+    );
+  });
+
   it('executes a concurrent idempotent effect only once', async () => {
     let executions = 0;
     const execute = () =>
