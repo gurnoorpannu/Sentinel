@@ -12,8 +12,8 @@ persisted attempt count and maximum:
 - permanent → `failed`; or
 - retryable with no attempts remaining → `failed`.
 
-A terminal task failure also marks the workflow failed in the same transaction. Phase 6 will replace
-that terminal transition with compensation when completed reversible steps exist.
+A terminal forward failure either marks the workflow failed or starts compensation in the same
+transaction. Compensation attempts use the same retry ceiling and scheduling rules.
 
 ## Exponential backoff
 

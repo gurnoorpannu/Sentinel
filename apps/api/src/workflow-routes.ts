@@ -18,6 +18,10 @@ const createWorkflowSchema = z.object({
           .string()
           .regex(/^[a-z][a-z0-9._-]{0,119}$/)
           .optional(),
+        compensationHandler: z
+          .string()
+          .regex(/^[a-z][a-z0-9._-]{0,119}$/)
+          .optional(),
         payload: jsonObjectSchema.optional(),
         maxAttempts: z.number().int().min(1).max(100).optional(),
       }),
@@ -62,8 +66,18 @@ export function registerWorkflowRoutes(app: FastifyInstance, workflows: Workflow
         payload,
         steps: [
           { name: 'Validate order', handler: 'validate-order', payload },
-          { name: 'Charge payment', handler: 'charge-payment', payload },
-          { name: 'Reserve inventory', handler: 'reserve-inventory', payload },
+          {
+            name: 'Charge payment',
+            handler: 'charge-payment',
+            compensationHandler: 'refund-payment',
+            payload,
+          },
+          {
+            name: 'Reserve inventory',
+            handler: 'reserve-inventory',
+            compensationHandler: 'release-inventory',
+            payload,
+          },
           { name: 'Send confirmation', handler: 'send-confirmation', payload },
         ],
       });

@@ -32,7 +32,8 @@ constraints, and transaction boundaries are described in [the durable data model
 The worker ownership protocol is explained in
 [leasing and generation fencing](docs/leasing.md). Ordered execution is described in
 [sequential orchestration](docs/orchestration.md). Failure recovery is covered in
-[retries and idempotency](docs/retries-and-idempotency.md).
+[retries and idempotency](docs/retries-and-idempotency.md), while partial rollback is detailed in
+[saga compensation](docs/compensation.md).
 
 ## Repository structure
 
@@ -121,9 +122,9 @@ npm run dev
 
 ## Current milestone
 
-Phase 5 provides retry classification, exponential backoff with jitter, retry ceilings, and durable
-idempotency protection for external effects. PostgreSQL integration tests prove scheduled retries
-cannot run early, exhausted retries become terminal, concurrent duplicate calls execute once, and a
-payment result survives a worker crash before task completion.
-
-Phase 6 will add reverse-order saga compensation for partially completed workflows.
+Phase 6 provides durable reverse-order saga compensation. A permanent forward failure moves the
+workflow into `compensating`, then leases each completed reversible step in reverse order. The
+e-commerce workflow releases reserved inventory before refunding payment; both effects have
+operation-specific idempotency keys and use the normal lease, generation fence, retry policy, and
+event history. PostgreSQL integration tests cover successful rollback, delayed retries, exhausted
+compensation, and end-to-end compensator execution.

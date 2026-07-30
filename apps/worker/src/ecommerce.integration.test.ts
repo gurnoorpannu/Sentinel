@@ -183,4 +183,104 @@ describeWithDatabase('e-commerce workflow with PostgreSQL', () => {
     );
     expect(Number(effects.rows[0]?.count)).toBe(1);
   });
+
+  it('executes durable refund and inventory release compensation', async () => {
+    const payload = {
+      orderId: 'order-compensate',
+      customerEmail: 'buyer@example.com',
+      totalCents: 4200,
+      currency: 'USD',
+      items: [{ sku: 'sentinel-shirt', quantity: 2 }],
+    };
+    const created = await repository.createWorkflow({
+      name: 'Compensated order',
+      steps: [
+        { name: 'Validate order', handler: 'validate-order', payload },
+        {
+          name: 'Charge payment',
+          handler: 'charge-payment',
+          compensationHandler: 'refund-payment',
+          payload,
+        },
+        {
+          name: 'Reserve inventory',
+          handler: 'reserve-inventory',
+          compensationHandler: 'release-inventory',
+          payload,
+        },
+        { name: 'Send confirmation', handler: 'send-confirmation', payload },
+      ],
+    });
+    const registry = createDefaultHandlerRegistry(new IdempotencyRepository(pool));
+
+    for (let stepNumber = 1; stepNumber <= 3; stepNumber += 1) {
+      const task = await repository.claimTask({
+        workerId: `forward-${stepNumber}`,
+        leaseDurationMs: 30_000,
+      });
+      await executeLeasedTask({
+        repository,
+        task: task!,
+        workerId: `forward-${stepNumber}`,
+        leaseDurationMs: 30_000,
+        heartbeatIntervalMs: 10_000,
+        execute: async (leasedTask) => await registry.execute(leasedTask),
+      });
+    }
+
+    const confirmation = await repository.claimTask({
+      workerId: 'forward-4',
+      leaseDurationMs: 30_000,
+    });
+    await repository.failTask({
+      taskId: confirmation!.id,
+      workerId: 'forward-4',
+      generation: confirmation!.generation,
+      error: { code: 'EMAIL_REJECTED' },
+      retryable: false,
+      retryDelayMs: 0,
+    });
+
+    for (const [index, expectedHandler] of ['release-inventory', 'refund-payment'].entries()) {
+      const task = await repository.claimTask({
+        workerId: `compensator-${index + 1}`,
+        leaseDurationMs: 30_000,
+      });
+      expect(task).toMatchObject({
+        workflowId: created.workflow.id,
+        compensationHandler: expectedHandler,
+        executionMode: 'compensation',
+      });
+      await executeLeasedTask({
+        repository,
+        task: task!,
+        workerId: `compensator-${index + 1}`,
+        leaseDurationMs: 30_000,
+        heartbeatIntervalMs: 10_000,
+        execute: async (leasedTask) => await registry.execute(leasedTask),
+      });
+    }
+
+    const compensated = await repository.getWorkflow(created.workflow.id);
+    expect(compensated?.workflow.status).toBe('compensated');
+    expect(compensated?.tasks[1]?.result).toMatchObject({
+      refundId: 'refund-order-compensate',
+    });
+    expect(compensated?.tasks[2]?.result).toMatchObject({
+      releaseId: 'release-order-compensate',
+    });
+
+    const compensationEffects = await pool.query<{ operation: string }>(
+      `
+        SELECT operation
+        FROM idempotency_records
+        WHERE operation IN ('release-inventory', 'refund-payment')
+        ORDER BY operation
+      `,
+    );
+    expect(compensationEffects.rows.map(({ operation }) => operation)).toEqual([
+      'refund-payment',
+      'release-inventory',
+    ]);
+  });
 });

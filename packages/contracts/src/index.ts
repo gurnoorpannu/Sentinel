@@ -31,6 +31,7 @@ export type JsonObject = { [key: string]: JsonValue };
 export interface WorkflowStepDefinition {
   name: string;
   handler?: string;
+  compensationHandler?: string;
   payload?: JsonObject;
   maxAttempts?: number;
 }
@@ -59,6 +60,8 @@ export interface Task {
   stepNumber: number;
   name: string;
   handler: string;
+  compensationHandler: string | null;
+  executionMode: 'forward' | 'compensation';
   status: TaskStatus;
   payload: JsonObject;
   result: JsonValue | null;
@@ -127,11 +130,11 @@ export const workflowTransitions: Readonly<Record<WorkflowStatus, readonly Workf
 export const taskTransitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
   blocked: ['ready'],
   ready: ['leased'],
-  leased: ['completed', 'retry_scheduled', 'failed'],
-  retry_scheduled: ['ready'],
+  leased: ['completed', 'retry_scheduled', 'failed', 'compensated', 'compensation_failed'],
+  retry_scheduled: ['leased'],
   completed: ['compensating'],
   failed: [],
-  compensating: ['compensated', 'compensation_failed'],
+  compensating: ['leased'],
   compensated: [],
   compensation_failed: [],
 };

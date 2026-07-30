@@ -21,9 +21,14 @@ export class HandlerRegistry {
   }
 
   async execute(task: Task): Promise<JsonValue> {
-    const handler = this.handlers.get(task.handler);
+    const handlerName =
+      task.executionMode === 'compensation' ? task.compensationHandler : task.handler;
+    if (!handlerName) {
+      throw new UnknownTaskHandlerError('missing-compensation-handler');
+    }
+    const handler = this.handlers.get(handlerName);
     if (!handler) {
-      throw new UnknownTaskHandlerError(task.handler);
+      throw new UnknownTaskHandlerError(handlerName);
     }
     return await handler(task);
   }

@@ -34,6 +34,8 @@ interface TaskRow extends QueryResultRow {
   step_number: number;
   name: string;
   handler: string;
+  compensation_handler: string | null;
+  execution_mode: 'forward' | 'compensation';
   status: TaskStatus;
   payload: JsonObject;
   result: JsonValue | null;
@@ -126,11 +128,13 @@ export class WorkflowRepository {
         const taskResult = await client.query<TaskRow>(
           `
             INSERT INTO tasks (
-              workflow_id, step_number, name, handler, status, payload, max_attempts
+              workflow_id, step_number, name, handler, compensation_handler,
+              status, payload, max_attempts
             )
-            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
             RETURNING
-              id, workflow_id, step_number, name, handler, status, payload, result,
+              id, workflow_id, step_number, name, handler, compensation_handler,
+              execution_mode, status, payload, result,
               max_attempts, attempt_count, lease_owner, lease_expires_at,
               generation, next_attempt_at, created_at, updated_at, completed_at
           `,
@@ -139,6 +143,7 @@ export class WorkflowRepository {
             index + 1,
             step.name.trim(),
             step.handler ?? 'noop',
+            step.compensationHandler ?? null,
             index === 0 ? 'ready' : 'blocked',
             JSON.stringify(step.payload ?? {}),
             step.maxAttempts ?? 5,
@@ -252,10 +257,11 @@ export class WorkflowRepository {
           FROM tasks t
           INNER JOIN workflows w ON w.id = t.workflow_id
           WHERE
-            w.status IN ('pending', 'running')
+            w.status IN ('pending', 'running', 'compensating')
             AND t.attempt_count < t.max_attempts
             AND (
               t.status = 'ready'
+              OR t.status = 'compensating'
               OR (
                 t.status = 'retry_scheduled'
                 AND t.next_attempt_at <= now()
@@ -319,12 +325,7 @@ export class WorkflowRepository {
       await appendEvent(client, {
         workflowId: task.workflow_id,
         taskId: task.id,
-        eventType:
-          candidate.status === 'leased'
-            ? 'task.reclaimed'
-            : candidate.status === 'retry_scheduled'
-              ? 'task.retried'
-              : 'task.leased',
+        eventType: claimEventType(candidate.status, task.execution_mode),
         data: {
           workerId,
           generation: Number(task.generation),
@@ -408,9 +409,7 @@ export class WorkflowRepository {
       taskId,
       workerId,
       generation,
-      status: 'completed',
       result,
-      eventType: 'task.completed',
     });
   }
 
@@ -437,6 +436,7 @@ export class WorkflowRepository {
           SET
             status = CASE
               WHEN $4 AND attempt_count < max_attempts THEN 'retry_scheduled'
+              WHEN execution_mode = 'compensation' THEN 'compensation_failed'
               ELSE 'failed'
             END,
             result = $5::jsonb,
@@ -473,7 +473,11 @@ export class WorkflowRepository {
       await appendEvent(client, {
         workflowId: task.workflow_id,
         taskId: task.id,
-        eventType: retryScheduled ? 'task.retry_scheduled' : 'task.failed',
+        eventType: retryScheduled
+          ? 'task.retry_scheduled'
+          : task.status === 'compensation_failed'
+            ? 'task.compensation_failed'
+            : 'task.failed',
         data: {
           workerId,
           generation,
@@ -485,24 +489,10 @@ export class WorkflowRepository {
       });
 
       if (!retryScheduled) {
-        const failedWorkflow = await client.query(
-          `
-            UPDATE workflows
-            SET
-              status = 'failed',
-              version = version + 1,
-              updated_at = now(),
-              completed_at = now()
-            WHERE id = $1 AND status = 'running'
-          `,
-          [task.workflow_id],
-        );
-        if (failedWorkflow.rowCount === 1) {
-          await appendEvent(client, {
-            workflowId: task.workflow_id,
-            eventType: 'workflow.status_changed',
-            data: { from: 'running', to: 'failed' },
-          });
+        if (task.execution_mode === 'compensation') {
+          await failCompensation(client, task);
+        } else {
+          await startCompensationOrFailWorkflow(client, task);
         }
       }
 
@@ -520,9 +510,7 @@ export class WorkflowRepository {
     taskId: string;
     workerId: string;
     generation: number;
-    status: 'completed' | 'failed';
     result: JsonValue;
-    eventType: 'task.completed' | 'task.failed';
   }): Promise<Task | null> {
     validateWorkerId(input.workerId);
     validateGeneration(input.generation);
@@ -534,8 +522,11 @@ export class WorkflowRepository {
         `
           UPDATE tasks
           SET
-            status = $4,
-            result = $5::jsonb,
+            status = CASE
+              WHEN execution_mode = 'compensation' THEN 'compensated'
+              ELSE 'completed'
+            END,
+            result = $4::jsonb,
             lease_owner = NULL,
             lease_expires_at = NULL,
             updated_at = now(),
@@ -548,13 +539,7 @@ export class WorkflowRepository {
             AND lease_expires_at > now()
           RETURNING ${taskColumns}
         `,
-        [
-          input.taskId,
-          input.workerId,
-          input.generation,
-          input.status,
-          JSON.stringify(input.result),
-        ],
+        [input.taskId, input.workerId, input.generation, JSON.stringify(input.result)],
       );
       const task = taskResult.rows[0];
 
@@ -566,7 +551,7 @@ export class WorkflowRepository {
       await appendEvent(client, {
         workflowId: task.workflow_id,
         taskId: task.id,
-        eventType: input.eventType,
+        eventType: task.status === 'compensated' ? 'task.compensated' : 'task.completed',
         data: {
           workerId: input.workerId,
           generation: input.generation,
@@ -574,7 +559,9 @@ export class WorkflowRepository {
         },
       });
 
-      if (input.status === 'completed') {
+      if (task.status === 'compensated') {
+        await advanceCompensation(client, task);
+      } else {
         await advanceWorkflow(client, task);
       }
 
@@ -590,7 +577,8 @@ export class WorkflowRepository {
 }
 
 const taskColumns = `
-  id, workflow_id, step_number, name, handler, status, payload, result,
+  id, workflow_id, step_number, name, handler, compensation_handler,
+  execution_mode, status, payload, result,
   max_attempts, attempt_count, lease_owner, lease_expires_at,
   generation, next_attempt_at, created_at, updated_at, completed_at
 `;
@@ -626,6 +614,14 @@ function validateDefinition(input: CreateWorkflowInput): void {
         `Step ${index + 1} handler must be a lowercase handler identifier`,
       );
     }
+    if (
+      step.compensationHandler !== undefined &&
+      !/^[a-z][a-z0-9._-]{0,119}$/.test(step.compensationHandler)
+    ) {
+      throw new InvalidWorkflowDefinitionError(
+        `Step ${index + 1} compensationHandler must be a lowercase handler identifier`,
+      );
+    }
   }
 }
 
@@ -646,6 +642,205 @@ function validateGeneration(generation: number): void {
   if (!Number.isSafeInteger(generation) || generation < 1) {
     throw new RangeError('generation must be a positive safe integer');
   }
+}
+
+function claimEventType(
+  previousStatus: TaskStatus,
+  executionMode: 'forward' | 'compensation',
+): string {
+  const compensation = executionMode === 'compensation';
+  if (previousStatus === 'leased') {
+    return compensation ? 'task.compensation_reclaimed' : 'task.reclaimed';
+  }
+  if (previousStatus === 'retry_scheduled') {
+    return compensation ? 'task.compensation_retried' : 'task.retried';
+  }
+  return compensation ? 'task.compensation_leased' : 'task.leased';
+}
+
+async function startCompensationOrFailWorkflow(
+  client: PoolClient,
+  failedTask: TaskRow,
+): Promise<void> {
+  const compensatableResult = await client.query<NextTaskRow>(
+    `
+      SELECT id, status, step_number
+      FROM tasks
+      WHERE
+        workflow_id = $1
+        AND step_number < $2
+        AND status = 'completed'
+        AND compensation_handler IS NOT NULL
+      ORDER BY step_number DESC
+      FOR UPDATE
+      LIMIT 1
+    `,
+    [failedTask.workflow_id, failedTask.step_number],
+  );
+  const compensatableTask = compensatableResult.rows[0];
+
+  if (!compensatableTask) {
+    const failedWorkflow = await client.query(
+      `
+        UPDATE workflows
+        SET
+          status = 'failed',
+          version = version + 1,
+          updated_at = now(),
+          completed_at = now()
+        WHERE id = $1 AND status = 'running'
+      `,
+      [failedTask.workflow_id],
+    );
+    if (failedWorkflow.rowCount === 1) {
+      await appendEvent(client, {
+        workflowId: failedTask.workflow_id,
+        eventType: 'workflow.status_changed',
+        data: { from: 'running', to: 'failed' },
+      });
+    }
+    return;
+  }
+
+  const compensatingWorkflow = await client.query(
+    `
+      UPDATE workflows
+      SET
+        status = 'compensating',
+        version = version + 1,
+        updated_at = now(),
+        completed_at = NULL
+      WHERE id = $1 AND status = 'running'
+    `,
+    [failedTask.workflow_id],
+  );
+  if (compensatingWorkflow.rowCount !== 1) {
+    throw new Error(`Workflow ${failedTask.workflow_id} was not running after task failure`);
+  }
+
+  await appendEvent(client, {
+    workflowId: failedTask.workflow_id,
+    eventType: 'workflow.status_changed',
+    data: { from: 'running', to: 'compensating' },
+  });
+  await activateCompensation(client, failedTask.workflow_id, compensatableTask, failedTask.id);
+}
+
+async function failCompensation(client: PoolClient, failedTask: TaskRow): Promise<void> {
+  const failedWorkflow = await client.query(
+    `
+      UPDATE workflows
+      SET
+        status = 'compensation_failed',
+        version = version + 1,
+        updated_at = now(),
+        completed_at = now()
+      WHERE id = $1 AND status = 'compensating'
+    `,
+    [failedTask.workflow_id],
+  );
+  if (failedWorkflow.rowCount !== 1) {
+    throw new Error(
+      `Workflow ${failedTask.workflow_id} was not compensating after compensation failure`,
+    );
+  }
+
+  await appendEvent(client, {
+    workflowId: failedTask.workflow_id,
+    eventType: 'workflow.status_changed',
+    data: { from: 'compensating', to: 'compensation_failed' },
+  });
+}
+
+async function advanceCompensation(client: PoolClient, compensatedTask: TaskRow): Promise<void> {
+  const previousTaskResult = await client.query<NextTaskRow>(
+    `
+      SELECT id, status, step_number
+      FROM tasks
+      WHERE
+        workflow_id = $1
+        AND step_number < $2
+        AND status = 'completed'
+        AND compensation_handler IS NOT NULL
+      ORDER BY step_number DESC
+      FOR UPDATE
+      LIMIT 1
+    `,
+    [compensatedTask.workflow_id, compensatedTask.step_number],
+  );
+  const previousTask = previousTaskResult.rows[0];
+
+  if (previousTask) {
+    await activateCompensation(
+      client,
+      compensatedTask.workflow_id,
+      previousTask,
+      compensatedTask.id,
+    );
+    return;
+  }
+
+  const compensatedWorkflow = await client.query(
+    `
+      UPDATE workflows
+      SET
+        status = 'compensated',
+        version = version + 1,
+        updated_at = now(),
+        completed_at = now()
+      WHERE id = $1 AND status = 'compensating'
+    `,
+    [compensatedTask.workflow_id],
+  );
+  if (compensatedWorkflow.rowCount !== 1) {
+    throw new Error(
+      `Workflow ${compensatedTask.workflow_id} was not compensating at final compensation`,
+    );
+  }
+
+  await appendEvent(client, {
+    workflowId: compensatedTask.workflow_id,
+    eventType: 'workflow.status_changed',
+    data: { from: 'compensating', to: 'compensated' },
+  });
+}
+
+async function activateCompensation(
+  client: PoolClient,
+  workflowId: string,
+  task: NextTaskRow,
+  triggeredByTaskId: string,
+): Promise<void> {
+  const activated = await client.query(
+    `
+      UPDATE tasks
+      SET
+        status = 'compensating',
+        execution_mode = 'compensation',
+        attempt_count = 0,
+        generation = 0,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        next_attempt_at = NULL,
+        updated_at = now(),
+        completed_at = NULL
+      WHERE id = $1 AND status = 'completed'
+    `,
+    [task.id],
+  );
+  if (activated.rowCount !== 1) {
+    throw new Error(`Cannot compensate task ${task.id} from unexpected status ${task.status}`);
+  }
+
+  await appendEvent(client, {
+    workflowId,
+    taskId: task.id,
+    eventType: 'task.compensation_ready',
+    data: {
+      stepNumber: task.step_number,
+      triggeredByTaskId,
+    },
+  });
 }
 
 async function advanceWorkflow(client: PoolClient, completedTask: TaskRow): Promise<void> {
@@ -766,7 +961,8 @@ async function getWorkflowWithClient(
     client.query<TaskRow>(
       `
         SELECT
-          id, workflow_id, step_number, name, handler, status, payload, result,
+          id, workflow_id, step_number, name, handler, compensation_handler,
+          execution_mode, status, payload, result,
           max_attempts, attempt_count, lease_owner, lease_expires_at,
           generation, next_attempt_at, created_at, updated_at, completed_at
         FROM tasks
@@ -815,6 +1011,8 @@ function mapTask(row: TaskRow): Task {
     stepNumber: row.step_number,
     name: row.name,
     handler: row.handler,
+    compensationHandler: row.compensation_handler,
+    executionMode: row.execution_mode,
     status: row.status,
     payload: row.payload,
     result: row.result,

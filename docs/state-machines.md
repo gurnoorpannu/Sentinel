@@ -42,10 +42,11 @@ stateDiagram-v2
     leased --> completed
     leased --> retry_scheduled
     leased --> failed
-    retry_scheduled --> ready
+    retry_scheduled --> leased
     completed --> compensating
-    compensating --> compensated
-    compensating --> compensation_failed
+    compensating --> leased
+    leased --> compensated
+    leased --> compensation_failed
 ```
 
 | State                 | Meaning                                                   |
@@ -56,14 +57,14 @@ stateDiagram-v2
 | `retry_scheduled`     | The last attempt failed and a future retry time is set.   |
 | `completed`           | The forward action completed and its result was recorded. |
 | `failed`              | The forward action exhausted retries.                     |
-| `compensating`        | The reverse action is eligible or executing.              |
+| `compensating`        | The reverse action is eligible to be leased.              |
 | `compensated`         | The reverse action completed.                             |
 | `compensation_failed` | The reverse action exhausted retries.                     |
 
 ## Transition invariants
 
 1. A task becomes `ready` only when every preceding step is `completed`.
-2. Only a `ready` task whose scheduled time has passed may be leased.
+2. Only a ready forward task, due retry, expired lease, or activated compensation may be leased.
 3. Claiming a task always increments its generation.
 4. A leased-task update must match task ID, lease owner, and generation.
 5. Completing a task and activating the next task occur in one transaction.

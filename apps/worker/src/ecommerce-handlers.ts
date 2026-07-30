@@ -60,6 +60,24 @@ export function createDefaultHandlerRegistry(
         })),
       }));
     })
+    .register('release-inventory', async (task) => {
+      const order = parseOrder(task);
+      return await executeIdempotently(idempotency, task, 'release-inventory', async () => ({
+        releaseId: `release-${order.orderId}`,
+        reservationId: `reservation-${order.orderId}`,
+        orderId: order.orderId,
+      }));
+    })
+    .register('refund-payment', async (task) => {
+      const order = parseOrder(task);
+      return await executeIdempotently(idempotency, task, 'refund-payment', async () => ({
+        refundId: `refund-${order.orderId}`,
+        chargeId: `charge-${order.orderId}`,
+        orderId: order.orderId,
+        amountCents: order.totalCents,
+        currency: order.currency,
+      }));
+    })
     .register('send-confirmation', async (task) => {
       const order = parseOrder(task);
       return await executeIdempotently(idempotency, task, 'send-confirmation', async () => ({
@@ -100,7 +118,7 @@ async function executeIdempotently(
   produce: () => Promise<JsonValue>,
 ): Promise<JsonValue> {
   const outcome = await idempotency.execute({
-    key: `${task.workflowId}:${task.stepNumber}:${task.handler}`,
+    key: `${task.workflowId}:${task.stepNumber}:${operation}`,
     operation,
     request: task.payload,
     produce,

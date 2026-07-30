@@ -30,6 +30,34 @@ describe('task handler registry', () => {
     });
   });
 
+  it('dispatches compensation handlers instead of forward handlers', async () => {
+    const registry = createDefaultHandlerRegistry();
+    const task = createTask();
+
+    await expect(
+      registry.execute({
+        ...task,
+        handler: 'reserve-inventory',
+        compensationHandler: 'release-inventory',
+        executionMode: 'compensation',
+      }),
+    ).resolves.toMatchObject({
+      releaseId: 'release-order-42',
+      reservationId: 'reservation-order-42',
+    });
+    await expect(
+      registry.execute({
+        ...task,
+        handler: 'charge-payment',
+        compensationHandler: 'refund-payment',
+        executionMode: 'compensation',
+      }),
+    ).resolves.toMatchObject({
+      refundId: 'refund-order-42',
+      chargeId: 'charge-order-42',
+    });
+  });
+
   it('rejects unknown persisted handlers', async () => {
     const registry = new HandlerRegistry();
 
@@ -47,6 +75,8 @@ function createTask(): Task {
     stepNumber: 1,
     name: 'Order task',
     handler: 'noop',
+    compensationHandler: null,
+    executionMode: 'forward',
     status: 'leased',
     payload: {
       orderId: 'order-42',
