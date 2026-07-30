@@ -6,6 +6,8 @@ const root = process.cwd();
 const dockerfile = await read('Dockerfile');
 const compose = await read('compose.yaml');
 const kustomization = await read('deploy/kubernetes/kustomization.yaml');
+const dashboardManifest = await read('deploy/kubernetes/dashboard.yaml');
+const secretExample = await read('deploy/kubernetes/secret.example.yaml');
 
 assert(dockerfile.includes('FROM node:22-alpine AS build'), 'Docker build must use Node 22');
 assert(count(dockerfile, 'USER node') === 2, 'Both runtime images must run as the node user');
@@ -16,6 +18,14 @@ assert(
 assert(compose.includes('read_only: true'), 'Compose application containers must be read-only');
 assert(compose.includes('no-new-privileges:true'), 'Compose must prevent privilege escalation');
 assert(compose.includes('cap_drop:\n    - ALL'), 'Compose must drop Linux capabilities');
+assert(
+  dashboardManifest.includes('key: OPERATOR_TOKEN'),
+  'Dashboard must receive the server-only operator token from a Secret',
+);
+assert(
+  secretExample.includes('OPERATOR_TOKEN:'),
+  'Deployment secret example must declare the operator token',
+);
 
 const resources = [...kustomization.matchAll(/^\s*-\s+([a-z0-9.-]+\.yaml)$/gim)].map(
   ([, resource]) => resource,

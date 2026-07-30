@@ -36,7 +36,8 @@ The worker ownership protocol is explained in
 [saga compensation](docs/compensation.md). The operator experience is covered in
 [the dashboard guide](docs/dashboard.md), and the reliability proof is documented in
 [chaos and recovery testing](docs/chaos-testing.md). Production operations are covered by
-[the deployment and operations runbook](docs/production.md).
+[the deployment and operations runbook](docs/production.md), including
+[authenticated operator recovery](docs/operator-controls.md).
 
 ## Repository structure
 

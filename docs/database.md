@@ -93,3 +93,10 @@ last line of defense.
 This table stores one simulated external effect per stable key, including its operation, request
 hash, and response. Advisory transaction locking prevents concurrent callers from executing the
 same effect twice.
+
+### `operator_actions`
+
+This ledger attributes every accepted manual command to a workflow, stable operator ID, required
+reason, expected projection version, and resulting version. Its row is inserted in the same
+transaction as the projection changes and `operator.action_applied` event. Optimistic concurrency
+and state preconditions are checked before any ledger or workflow write occurs.

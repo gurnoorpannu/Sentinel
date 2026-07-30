@@ -64,6 +64,17 @@ Recommended initial alerts:
 | API 5xx request rate                               | More than 2% for 5 minutes                 |
 | Ready API replicas                                 | Fewer than the required availability floor |
 
+## Operator recovery
+
+Set `OPERATOR_TOKEN` to a random value of at least 32 characters to enable guarded cancel and retry
+commands. Keep it in the same external secret manager used for database credentials, mount it only
+into the API and dashboard, and rotate it after any suspected exposure. The dashboard uses the
+token only in its server-side API proxy; it is never a `NEXT_PUBLIC_` variable.
+
+Every action requires a named operator, a reason, and the workflow version the operator reviewed.
+State preconditions and optimistic concurrency prevent a stale dashboard from applying an unsafe
+command. See [operator controls](operator-controls.md) for the command matrix and audit guarantees.
+
 ## Kubernetes deployment
 
 The manifests in `deploy/kubernetes` assume:
@@ -121,5 +132,6 @@ with the previously deployed application until the rollback window closes.
 3. Open the affected workflow in the dashboard and verify event-history integrity.
 4. Confirm the active task generation and lease owner before restarting workers.
 5. Never edit workflow/task rows manually without preserving an equivalent audit event.
-6. If compensation failed, resolve the downstream dependency before any explicit operator repair.
+6. If compensation failed, resolve the downstream dependency, reload the workflow version, and use
+   the guarded compensation retry with a specific audit reason.
 7. Preserve logs, workflow IDs, event sequences, and idempotency keys for the incident record.

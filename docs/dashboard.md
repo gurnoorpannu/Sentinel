@@ -1,8 +1,8 @@
 # Operations dashboard
 
 Phase 7 turns Sentinel's durable projections and event history into an operator-facing control
-room. The dashboard is deliberately read-only: it helps diagnose workflow execution without adding
-an unsafe manual mutation path.
+room. Normal inspection is read-only, while explicit recovery uses only authenticated,
+state-restricted operator commands.
 
 ## Workflow overview
 
@@ -39,6 +39,12 @@ The integrity banner is computed independently from the projection. A verified r
 sequences are contiguous and replay to the same workflow/task states. A divergence result lists the
 specific sequence, reference, counter, or projection mismatch.
 
+When `OPERATOR_TOKEN` is configured on both the API and dashboard server, the detail page shows the
+single safe action for the current state: cancel while pending, retry a failed forward task, or
+retry failed compensation. The browser submits operator identity, reason, and visible workflow
+version to a server-only proxy, so the bearer token never enters client JavaScript. Conflicts force
+a refresh instead of overwriting newer durable state.
+
 ## Service boundary
 
 The browser calls same-origin Next.js routes:
@@ -46,6 +52,7 @@ The browser calls same-origin Next.js routes:
 ```text
 /api/workflows
 /api/workflows/:workflowId
+/api/workflows/:workflowId/operator-actions
 ```
 
 Those routes proxy Sentinel's Fastify API through `SENTINEL_API_URL`. Docker Compose points that

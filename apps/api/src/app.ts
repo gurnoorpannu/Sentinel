@@ -64,7 +64,7 @@ export function buildApp({
 
   app.get('/', async () => ({
     name: 'Sentinel API',
-    phase: 9,
+    phase: 10,
     status: 'running',
   }));
 
