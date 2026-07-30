@@ -14,7 +14,9 @@ import { executeLeasedTask } from './lease-executor.js';
 import { RetryableTaskError } from './retry-policy.js';
 
 const environment = loadEnvironment();
-const database = createDatabasePool(environment.DATABASE_URL);
+const database = createDatabasePool(environment.DATABASE_URL, {
+  maxConnections: environment.DATABASE_POOL_MAX,
+});
 const repository = new WorkflowRepository(database);
 const idempotency = new IdempotencyRepository(database);
 const handlers = createDefaultHandlerRegistry(idempotency);
