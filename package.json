@@ -1,0 +1,44 @@
+{
+  "name": "sentinel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A durable PostgreSQL-backed workflow orchestration engine.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build:packages && npm run build -w @sentinel/api && npm run build -w @sentinel/worker && npm run build -w @sentinel/dashboard",
+    "build:packages": "npm run build -w @sentinel/config && npm run build -w @sentinel/contracts && npm run build -w @sentinel/database",
+    "dev": "npm run build:packages && concurrently --kill-others -n api,worker,dashboard -c blue,magenta,green \"npm run dev -w @sentinel/api\" \"npm run dev -w @sentinel/worker\" \"npm run dev -w @sentinel/dashboard\"",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "npm run build:packages && npm run typecheck -w @sentinel/api && npm run typecheck -w @sentinel/worker && npm run typecheck -w @sentinel/dashboard",
+    "db:migrate": "npm run build -w @sentinel/config && npm run build -w @sentinel/database && node packages/database/dist/migrate.js",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "concurrently": "^10.0.4",
+    "eslint": "^10.8.0",
+    "globals": "^17.8.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.25",
+      "sharp": "0.35.3"
+    }
+  }
+}
