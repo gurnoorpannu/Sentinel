@@ -30,7 +30,8 @@ See [the architecture guide](docs/architecture.md) and
 [the state-machine specification](docs/state-machines.md) for the system design. Phase 2's tables,
 constraints, and transaction boundaries are described in [the durable data model](docs/database.md).
 The worker ownership protocol is explained in
-[leasing and generation fencing](docs/leasing.md).
+[leasing and generation fencing](docs/leasing.md). Ordered execution is described in
+[sequential orchestration](docs/orchestration.md).
 
 ## Repository structure
 
@@ -86,19 +87,18 @@ The services will be available at:
 
 ## Workflow API
 
-Create the demonstration workflow:
+Create the four-step e-commerce demonstration workflow:
 
 ```bash
-curl --request POST http://localhost:4000/workflows \
+curl --request POST http://localhost:4000/workflows/ecommerce \
   --header 'content-type: application/json' \
   --data '{
-    "name": "Order fulfillment",
-    "payload": { "orderId": "order-42" },
-    "steps": [
-      { "name": "Validate order" },
-      { "name": "Charge payment", "maxAttempts": 3 },
-      { "name": "Reserve inventory" },
-      { "name": "Send confirmation" }
+    "orderId": "order-42",
+    "customerEmail": "buyer@example.com",
+    "totalCents": 1299,
+    "currency": "USD",
+    "items": [
+      { "sku": "sentinel-shirt", "quantity": 1 }
     ]
   }'
 ```
@@ -120,9 +120,10 @@ npm run dev
 
 ## Current milestone
 
-Phase 3 provides atomic PostgreSQL task claiming, time-limited worker leases, heartbeats, expired-task
-recovery, and generation-fenced completion and failure. PostgreSQL integration tests reproduce the
-stale Worker A / replacement Worker B timeline and prove that only the current generation can commit.
+Phase 4 provides persisted handler identities, worker-side handler dispatch, transactional next-step
+activation, automatic workflow completion, and the full e-commerce demonstration workflow.
+PostgreSQL integration tests prove that the four handlers run strictly in order while competing
+workers cannot claim blocked steps.
 
-Phase 4 will add the workflow handler registry, enforce sequential step activation after completion,
-and run the complete e-commerce demonstration workflow.
+Phase 5 will add retry classification, exponential backoff with jitter, retry ceilings, and
+idempotency protection for external effects.

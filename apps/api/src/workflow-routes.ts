@@ -1,6 +1,6 @@
 import type { CreateWorkflowInput, WorkflowDetail } from '@sentinel/contracts';
 import { InvalidWorkflowDefinitionError, type WorkflowRepository } from '@sentinel/database';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z, ZodError } from 'zod';
 
 export type WorkflowStore = Pick<WorkflowRepository, 'createWorkflow' | 'getWorkflow'>;
@@ -14,6 +14,10 @@ const createWorkflowSchema = z.object({
     .array(
       z.object({
         name: z.string().trim().min(1).max(120),
+        handler: z
+          .string()
+          .regex(/^[a-z][a-z0-9._-]{0,119}$/)
+          .optional(),
         payload: jsonObjectSchema.optional(),
         maxAttempts: z.number().int().min(1).max(100).optional(),
       }),
@@ -26,24 +30,60 @@ const workflowParametersSchema = z.object({
   workflowId: z.uuid(),
 });
 
+const ecommerceWorkflowSchema = z.object({
+  orderId: z.string().trim().min(1).max(120),
+  customerEmail: z.email(),
+  totalCents: z.number().int().positive(),
+  currency: z.string().trim().length(3).toUpperCase().default('USD'),
+  items: z
+    .array(
+      z.object({
+        sku: z.string().trim().min(1).max(120),
+        quantity: z.number().int().positive(),
+      }),
+    )
+    .min(1)
+    .max(100),
+});
+
 export function registerWorkflowRoutes(app: FastifyInstance, workflows: WorkflowStore): void {
+  app.post('/workflows/ecommerce', async (request, reply) => {
+    try {
+      const order = ecommerceWorkflowSchema.parse(request.body);
+      const payload = {
+        orderId: order.orderId,
+        customerEmail: order.customerEmail,
+        totalCents: order.totalCents,
+        currency: order.currency,
+        items: order.items,
+      };
+      const detail = await workflows.createWorkflow({
+        name: `Order ${order.orderId}`,
+        payload,
+        steps: [
+          { name: 'Validate order', handler: 'validate-order', payload },
+          { name: 'Charge payment', handler: 'charge-payment', payload },
+          { name: 'Reserve inventory', handler: 'reserve-inventory', payload },
+          { name: 'Send confirmation', handler: 'send-confirmation', payload },
+        ],
+      });
+      return sendCreatedWorkflow(reply, detail);
+    } catch (error) {
+      if (error instanceof ZodError || error instanceof InvalidWorkflowDefinitionError) {
+        return sendInvalidWorkflow(reply, error);
+      }
+      throw error;
+    }
+  });
+
   app.post('/workflows', async (request, reply) => {
     try {
       const input = createWorkflowSchema.parse(request.body) as CreateWorkflowInput;
       const detail = await workflows.createWorkflow(input);
-      return reply
-        .status(201)
-        .header('location', `/workflows/${detail.workflow.id}`)
-        .send(serializeWorkflowDetail(detail));
+      return sendCreatedWorkflow(reply, detail);
     } catch (error) {
       if (error instanceof ZodError || error instanceof InvalidWorkflowDefinitionError) {
-        return reply.status(400).send({
-          error: {
-            code: 'INVALID_WORKFLOW',
-            message: error.message,
-            details: error instanceof ZodError ? error.issues : undefined,
-          },
-        });
+        return sendInvalidWorkflow(reply, error);
       }
 
       throw error;
@@ -72,6 +112,26 @@ export function registerWorkflowRoutes(app: FastifyInstance, workflows: Workflow
     }
 
     return serializeWorkflowDetail(detail);
+  });
+}
+
+function sendCreatedWorkflow(reply: FastifyReply, detail: WorkflowDetail) {
+  return reply
+    .status(201)
+    .header('location', `/workflows/${detail.workflow.id}`)
+    .send(serializeWorkflowDetail(detail));
+}
+
+function sendInvalidWorkflow(
+  reply: FastifyReply,
+  error: ZodError | InvalidWorkflowDefinitionError,
+) {
+  return reply.status(400).send({
+    error: {
+      code: 'INVALID_WORKFLOW',
+      message: error.message,
+      details: error instanceof ZodError ? error.issues : undefined,
+    },
   });
 }
 

@@ -3,11 +3,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { loadEnvironment } from '@sentinel/config';
 import { createDatabasePool, WorkflowRepository } from '@sentinel/database';
 
+import { createDefaultHandlerRegistry } from './ecommerce-handlers.js';
 import { executeLeasedTask } from './lease-executor.js';
 
 const environment = loadEnvironment();
 const database = createDatabasePool(environment.DATABASE_URL);
 const repository = new WorkflowRepository(database);
+const handlers = createDefaultHandlerRegistry();
 let stopping = false;
 
 async function verifyDatabaseConnection(): Promise<void> {
@@ -37,13 +39,7 @@ async function workerLoop(): Promise<void> {
       workerId: environment.WORKER_ID,
       leaseDurationMs: environment.LEASE_DURATION_MS,
       heartbeatIntervalMs: environment.HEARTBEAT_INTERVAL_MS,
-      execute: async (leasedTask) => {
-        // Phase 4 replaces this acknowledgement with registered workflow handlers.
-        return {
-          acknowledged: true,
-          taskName: leasedTask.name,
-        };
-      },
+      execute: async (leasedTask) => await handlers.execute(leasedTask),
       onHeartbeatError: (error) => {
         process.stderr.write(
           `[${environment.WORKER_ID}] Lease heartbeat failed for ${task.id}: ${String(error)}\n`,
