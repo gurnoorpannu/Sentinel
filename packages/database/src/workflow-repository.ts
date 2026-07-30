@@ -164,10 +164,7 @@ export class WorkflowRepository {
     }
   }
 
-  async transitionWorkflow(
-    workflowId: string,
-    to: WorkflowStatus,
-  ): Promise<WorkflowDetail | null> {
+  async transitionWorkflow(workflowId: string, to: WorkflowStatus): Promise<WorkflowDetail | null> {
     const client = await this.pool.connect();
 
     try {
@@ -282,13 +279,7 @@ async function appendEvent(client: PoolClient, input: AppendEventInput): Promise
       )
       VALUES ($1, $2, $3, $4, $5::jsonb)
     `,
-    [
-      input.workflowId,
-      input.taskId ?? null,
-      sequence,
-      input.eventType,
-      JSON.stringify(input.data),
-    ],
+    [input.workflowId, input.taskId ?? null, sequence, input.eventType, JSON.stringify(input.data)],
   );
 }
 

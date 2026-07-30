@@ -5,6 +5,7 @@ export {
   InvalidWorkflowDefinitionError,
   WorkflowRepository,
 } from './workflow-repository.js';
+export { runMigrations } from './migrations.js';
 
 export function createDatabasePool(connectionString: string): Pool {
   return new Pool({

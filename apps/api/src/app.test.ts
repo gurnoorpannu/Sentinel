@@ -50,10 +50,7 @@ describe('workflow endpoints', () => {
       payload: {
         name: 'Order fulfillment',
         payload: { orderId: 'order-42' },
-        steps: [
-          { name: 'Validate order' },
-          { name: 'Charge payment', maxAttempts: 3 },
-        ],
+        steps: [{ name: 'Validate order' }, { name: 'Charge payment', maxAttempts: 3 }],
       },
     });
 

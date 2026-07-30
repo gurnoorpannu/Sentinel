@@ -1,8 +1,5 @@
 import type { CreateWorkflowInput, WorkflowDetail } from '@sentinel/contracts';
-import {
-  InvalidWorkflowDefinitionError,
-  type WorkflowRepository,
-} from '@sentinel/database';
+import { InvalidWorkflowDefinitionError, type WorkflowRepository } from '@sentinel/database';
 import type { FastifyInstance } from 'fastify';
 import { z, ZodError } from 'zod';
 
