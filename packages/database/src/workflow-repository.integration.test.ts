@@ -108,6 +108,27 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
     });
   });
 
+  it('serializes competing workflow transitions', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Concurrent transition test',
+      steps: [{ name: 'Only step' }],
+    });
+
+    const results = await Promise.allSettled([
+      repository.transitionWorkflow(created.workflow.id, 'running'),
+      repository.transitionWorkflow(created.workflow.id, 'running'),
+    ]);
+
+    expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(({ status }) => status === 'rejected')).toHaveLength(1);
+
+    const reloaded = await repository.getWorkflow(created.workflow.id);
+    expect(reloaded?.workflow).toMatchObject({ status: 'running', version: 2 });
+    expect(
+      reloaded?.events.filter(({ eventType }) => eventType === 'workflow.status_changed'),
+    ).toHaveLength(1);
+  });
+
   it('rolls back all rows when a later task cannot be serialized', async () => {
     const invalidPayload = { unsupported: BigInt(1) } as unknown as JsonObject;
 
