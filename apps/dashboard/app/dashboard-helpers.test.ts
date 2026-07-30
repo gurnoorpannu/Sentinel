@@ -38,6 +38,10 @@ describe('dashboard presentation helpers', () => {
       title: 'Compensation failed',
       tone: 'danger',
     });
+    expect(eventPresentation('operator.action_applied')).toMatchObject({
+      title: 'Operator action applied',
+      tone: 'violet',
+    });
   });
 
   it('formats workflow identity and payload values compactly', () => {

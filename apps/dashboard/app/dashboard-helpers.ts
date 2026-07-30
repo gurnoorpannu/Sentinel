@@ -74,6 +74,12 @@ export function formatPayloadValue(value: unknown): string {
 }
 
 export function eventPresentation(eventType: string): EventPresentation {
+  if (eventType === 'operator.action_applied') {
+    return { title: 'Operator action applied', symbol: '◆', tone: 'violet' };
+  }
+  if (eventType === 'task.canceled') {
+    return { title: 'Task canceled', symbol: '×', tone: 'neutral' };
+  }
   if (eventType.includes('compensation')) {
     if (eventType.includes('failed')) {
       return { title: 'Compensation failed', symbol: '!', tone: 'danger' };
