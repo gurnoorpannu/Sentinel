@@ -13,6 +13,9 @@ const environmentSchema = z
       .default('postgresql://sentinel:sentinel@localhost:5432/sentinel'),
     API_HOST: z.string().default('0.0.0.0'),
     API_PORT: z.coerce.number().int().positive().default(4000),
+    API_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(30_000),
+    API_KEEP_ALIVE_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(72_000),
+    SHUTDOWN_GRACE_PERIOD_MS: z.coerce.number().int().min(1_000).default(30_000),
     WORKER_ID: z.string().min(1).default('worker-local'),
     WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(1000),
     LEASE_DURATION_MS: z.coerce.number().int().min(100).default(30_000),
@@ -24,6 +27,7 @@ const environmentSchema = z
       .enum(['true', 'false'])
       .default('false')
       .transform((value) => value === 'true'),
+    METRICS_TOKEN: z.string().min(16).optional(),
   })
   .superRefine((environment, context) => {
     if (environment.HEARTBEAT_INTERVAL_MS >= environment.LEASE_DURATION_MS) {
