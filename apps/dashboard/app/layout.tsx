@@ -4,8 +4,8 @@ import type { ReactNode } from 'react';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Sentinel',
-  description: 'Durable workflow orchestration, even when workers fail.',
+  title: 'Sentinel · Workflow Operations',
+  description: 'Monitor durable workflows, retries, leases, and saga compensation.',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
