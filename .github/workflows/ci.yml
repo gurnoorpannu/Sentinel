@@ -34,6 +34,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - name: Smoke test worker benchmark
+        run: npm run benchmark:worker
+        env:
+          BENCHMARK_DATABASE_URL: postgresql://sentinel:sentinel@localhost:5432/sentinel_test
+          BENCHMARK_TASKS: 40
+          BENCHMARK_CONCURRENCY: 4
 
   containers:
     runs-on: ubuntu-latest
