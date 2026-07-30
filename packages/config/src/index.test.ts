@@ -9,6 +9,9 @@ describe('worker lease configuration', () => {
     expect(environment.LEASE_DURATION_MS).toBe(30_000);
     expect(environment.HEARTBEAT_INTERVAL_MS).toBe(10_000);
     expect(environment.SHUTDOWN_GRACE_PERIOD_MS).toBe(30_000);
+    expect(environment.WORKER_CONCURRENCY).toBe(4);
+    expect(environment.WORKER_HEARTBEAT_INTERVAL_MS).toBe(5_000);
+    expect(environment.DATABASE_POOL_MAX).toBe(10);
   });
 
   it('rejects a heartbeat interval that can outlive the lease', () => {
@@ -23,6 +26,21 @@ describe('worker lease configuration', () => {
   it('keeps chaos endpoints disabled unless explicitly enabled', () => {
     expect(loadEnvironment({}).CHAOS_MODE_ENABLED).toBe(false);
     expect(loadEnvironment({ CHAOS_MODE_ENABLED: 'true' }).CHAOS_MODE_ENABLED).toBe(true);
+  });
+
+  it('reserves database connections beyond worker execution slots', () => {
+    expect(() =>
+      loadEnvironment({
+        WORKER_CONCURRENCY: '8',
+        DATABASE_POOL_MAX: '9',
+      }),
+    ).toThrow();
+    expect(
+      loadEnvironment({
+        WORKER_CONCURRENCY: '8',
+        DATABASE_POOL_MAX: '12',
+      }).WORKER_CONCURRENCY,
+    ).toBe(8);
   });
 
   it('rejects short metrics tokens', () => {

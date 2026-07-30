@@ -11,12 +11,15 @@ const environmentSchema = z
       .string()
       .url()
       .default('postgresql://sentinel:sentinel@localhost:5432/sentinel'),
+    DATABASE_POOL_MAX: z.coerce.number().int().min(3).max(100).default(10),
     API_HOST: z.string().default('0.0.0.0'),
     API_PORT: z.coerce.number().int().positive().default(4000),
     API_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(30_000),
     API_KEEP_ALIVE_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(72_000),
     SHUTDOWN_GRACE_PERIOD_MS: z.coerce.number().int().min(1_000).default(30_000),
     WORKER_ID: z.string().min(1).default('worker-local'),
+    WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
+    WORKER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(10_000).default(5_000),
     WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(1000),
     LEASE_DURATION_MS: z.coerce.number().int().min(100).default(30_000),
     HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(50).default(10_000),
@@ -43,6 +46,14 @@ const environmentSchema = z
         code: 'custom',
         message: 'RETRY_BASE_DELAY_MS must not exceed RETRY_MAX_DELAY_MS',
         path: ['RETRY_BASE_DELAY_MS'],
+      });
+    }
+    if (environment.DATABASE_POOL_MAX < environment.WORKER_CONCURRENCY + 2) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'DATABASE_POOL_MAX must reserve at least two connections beyond WORKER_CONCURRENCY',
+        path: ['DATABASE_POOL_MAX'],
       });
     }
   });

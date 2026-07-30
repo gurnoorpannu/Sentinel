@@ -8,6 +8,7 @@ x-app: &app
     NODE_ENV: development
     LOG_LEVEL: info
     DATABASE_URL: postgresql://sentinel:sentinel@postgres:5432/sentinel
+    DATABASE_POOL_MAX: 10
   restart: unless-stopped
   init: true
   read_only: true
@@ -73,6 +74,8 @@ services:
     environment:
       <<: *app-environment
       WORKER_ID: worker-compose-1
+      WORKER_CONCURRENCY: 4
+      WORKER_HEARTBEAT_INTERVAL_MS: 5000
       WORKER_POLL_INTERVAL_MS: 1000
       LEASE_DURATION_MS: 30000
       HEARTBEAT_INTERVAL_MS: 10000

@@ -4,7 +4,9 @@ import { createDatabasePool, WorkflowRepository } from '@sentinel/database';
 import { buildApp } from './app.js';
 
 const environment = loadEnvironment();
-const database = createDatabasePool(environment.DATABASE_URL);
+const database = createDatabasePool(environment.DATABASE_URL, {
+  maxConnections: environment.DATABASE_POOL_MAX,
+});
 const workflows = new WorkflowRepository(database);
 let shuttingDown = false;
 const app = buildApp({
