@@ -17,7 +17,7 @@ export function buildApp({ database, workflows, logger = true }: BuildAppOptions
 
   app.get('/', async () => ({
     name: 'Sentinel API',
-    phase: 2,
+    phase: 3,
     status: 'running',
   }));
 

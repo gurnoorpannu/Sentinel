@@ -29,6 +29,8 @@ The complete design combines:
 See [the architecture guide](docs/architecture.md) and
 [the state-machine specification](docs/state-machines.md) for the system design. Phase 2's tables,
 constraints, and transaction boundaries are described in [the durable data model](docs/database.md).
+The worker ownership protocol is explained in
+[leasing and generation fencing](docs/leasing.md).
 
 ## Repository structure
 
@@ -118,10 +120,9 @@ npm run dev
 
 ## Current milestone
 
-Phase 2 provides the durable workflow, ordered-task, and append-only event model. Workflow creation
-and status retrieval are available through the API, with PostgreSQL integration tests proving
-transaction rollback, deterministic event order, state-transition validation, and concurrent
-transition serialization.
+Phase 3 provides atomic PostgreSQL task claiming, time-limited worker leases, heartbeats, expired-task
+recovery, and generation-fenced completion and failure. PostgreSQL integration tests reproduce the
+stale Worker A / replacement Worker B timeline and prove that only the current generation can commit.
 
-Phase 3 will implement atomic task claiming, worker leases, heartbeats, lease recovery, and
-generation fencing.
+Phase 4 will add the workflow handler registry, enforce sequential step activation after completion,
+and run the complete e-commerce demonstration workflow.
