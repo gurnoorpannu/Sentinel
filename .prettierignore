@@ -3,3 +3,4 @@ dist
 .next
 coverage
 package-lock.json
+apps/dashboard/next-env.d.ts
