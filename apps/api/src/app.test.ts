@@ -4,6 +4,68 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildApp } from './app.js';
 
 describe('API health endpoint', () => {
+  it('reports process liveness without depending on PostgreSQL', async () => {
+    const database = { query: vi.fn().mockRejectedValue(new Error('connection refused')) };
+    const app = buildApp({ database, workflows: createWorkflowStore(), logger: false });
+
+    const response = await app.inject({ method: 'GET', url: '/live' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: 'ok' });
+    expect(database.query).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('reports readiness only when PostgreSQL and the required schema are available', async () => {
+    const database = { query: vi.fn().mockResolvedValue({ rows: [{ schema_ready: true }] }) };
+    const app = buildApp({ database, workflows: createWorkflowStore(), logger: false });
+
+    const response = await app.inject({ method: 'GET', url: '/ready' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: 'ready',
+      database: 'connected',
+      schema: 'current',
+    });
+    await app.close();
+  });
+
+  it('removes a shutting-down instance from readiness', async () => {
+    const database = { query: vi.fn() };
+    const app = buildApp({
+      database,
+      workflows: createWorkflowStore(),
+      logger: false,
+      isShuttingDown: () => true,
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/ready' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      status: 'unavailable',
+      reason: 'shutting_down',
+    });
+    expect(database.query).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('rejects readiness when migrations are missing', async () => {
+    const database = { query: vi.fn().mockResolvedValue({ rows: [{ schema_ready: false }] }) };
+    const app = buildApp({ database, workflows: createWorkflowStore(), logger: false });
+
+    const response = await app.inject({ method: 'GET', url: '/ready' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      status: 'unavailable',
+      database: 'connected',
+      schema: 'outdated',
+    });
+    await app.close();
+  });
+
   it('reports a healthy database connection', async () => {
     const database = { query: vi.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] }) };
     const app = buildApp({ database, workflows: createWorkflowStore(), logger: false });

@@ -19,6 +19,7 @@ const repository = new WorkflowRepository(database);
 const idempotency = new IdempotencyRepository(database);
 const handlers = createDefaultHandlerRegistry(idempotency);
 let stopping = false;
+let shutdownTimer: NodeJS.Timeout | null = null;
 
 async function verifyDatabaseConnection(): Promise<void> {
   await database.query('SELECT 1');
@@ -89,6 +90,13 @@ function shutdown(signal: NodeJS.Signals): void {
 
   stopping = true;
   process.stdout.write(`[${environment.WORKER_ID}] Received ${signal}; shutting down\n`);
+  shutdownTimer = setTimeout(() => {
+    process.stderr.write(
+      `[${environment.WORKER_ID}] Shutdown grace period expired; abandoning in-flight work\n`,
+    );
+    process.exit(1);
+  }, environment.SHUTDOWN_GRACE_PERIOD_MS);
+  shutdownTimer.unref();
 }
 
 process.once('SIGINT', () => shutdown('SIGINT'));
@@ -101,5 +109,8 @@ try {
   process.stderr.write(`[${environment.WORKER_ID}] Worker failed: ${String(error)}\n`);
   process.exitCode = 1;
 } finally {
+  if (shutdownTimer) {
+    clearTimeout(shutdownTimer);
+  }
   await database.end();
 }

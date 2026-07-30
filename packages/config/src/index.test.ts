@@ -8,6 +8,7 @@ describe('worker lease configuration', () => {
 
     expect(environment.LEASE_DURATION_MS).toBe(30_000);
     expect(environment.HEARTBEAT_INTERVAL_MS).toBe(10_000);
+    expect(environment.SHUTDOWN_GRACE_PERIOD_MS).toBe(30_000);
   });
 
   it('rejects a heartbeat interval that can outlive the lease', () => {
