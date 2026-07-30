@@ -6,6 +6,7 @@ export {
   WorkflowRepository,
 } from './workflow-repository.js';
 export { runMigrations } from './migrations.js';
+export { IdempotencyConflictError, IdempotencyRepository } from './idempotency-repository.js';
 
 export function createDatabasePool(connectionString: string): Pool {
   return new Pool({

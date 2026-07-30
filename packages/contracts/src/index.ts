@@ -110,6 +110,8 @@ export interface CompleteTaskInput extends LeaseIdentity {
 
 export interface FailTaskInput extends LeaseIdentity {
   error: JsonObject;
+  retryable: boolean;
+  retryDelayMs: number;
 }
 
 export const workflowTransitions: Readonly<Record<WorkflowStatus, readonly WorkflowStatus[]>> = {
