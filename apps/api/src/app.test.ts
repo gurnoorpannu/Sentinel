@@ -117,8 +117,14 @@ describe('workflow endpoints', () => {
         payload: expect.objectContaining({ currency: 'USD' }),
         steps: [
           expect.objectContaining({ handler: 'validate-order' }),
-          expect.objectContaining({ handler: 'charge-payment' }),
-          expect.objectContaining({ handler: 'reserve-inventory' }),
+          expect.objectContaining({
+            handler: 'charge-payment',
+            compensationHandler: 'refund-payment',
+          }),
+          expect.objectContaining({
+            handler: 'reserve-inventory',
+            compensationHandler: 'release-inventory',
+          }),
           expect.objectContaining({ handler: 'send-confirmation' }),
         ],
       }),
