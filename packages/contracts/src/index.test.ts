@@ -16,4 +16,10 @@ describe('state machine contracts', () => {
   it('treats completed workflows as terminal', () => {
     expect(canTransitionWorkflow('completed', 'running')).toBe(false);
   });
+
+  it('leases compensation work before reaching a compensation outcome', () => {
+    expect(canTransitionTask('completed', 'compensating')).toBe(true);
+    expect(canTransitionTask('compensating', 'leased')).toBe(true);
+    expect(canTransitionTask('leased', 'compensated')).toBe(true);
+  });
 });

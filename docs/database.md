@@ -28,9 +28,11 @@ The first task is created as `ready`; every later task begins as `blocked`. Leas
 attempt, retry, and result columns are present now so later phases can implement queue execution
 without redesigning the table.
 
-The `handler` column stores the executable handler identity resolved by workers. Completing a task
-and activating its successor—or completing the workflow after the final task—occur in the same
-transaction.
+The `handler` column stores the forward executable identity resolved by workers.
+`compensation_handler` optionally identifies its reverse action, while `execution_mode` tells a
+worker which one to dispatch. Completing a task and activating its successor—or completing the
+workflow after the final task—occur in the same transaction. Compensation activation and selection
+of the preceding reversible task are also atomic.
 
 Partial indexes support the future hot paths:
 
