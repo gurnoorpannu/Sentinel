@@ -108,6 +108,7 @@ describe('API health endpoint', () => {
             workflows_failed: '0',
             workflows_compensated: '0',
             workflows_compensation_failed: '0',
+            workflows_canceled: '0',
             tasks_ready: '1',
             tasks_leased: '1',
             tasks_retry_scheduled: '0',

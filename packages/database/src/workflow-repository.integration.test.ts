@@ -8,7 +8,12 @@ import {
   type Pool,
 } from './index.js';
 import { runMigrations } from './migrations.js';
-import { InvalidStateTransitionError, WorkflowRepository } from './workflow-repository.js';
+import {
+  InvalidOperatorActionError,
+  InvalidStateTransitionError,
+  WorkflowRepository,
+  WorkflowVersionConflictError,
+} from './workflow-repository.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 const describeWithDatabase = testDatabaseUrl ? describe : describe.skip;
@@ -31,7 +36,7 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'TRUNCATE idempotency_records, workflow_events, tasks, workflows RESTART IDENTITY CASCADE',
+      'TRUNCATE idempotency_records, operator_actions, workflow_events, tasks, workflows RESTART IDENTITY CASCADE',
     );
   });
 
@@ -206,6 +211,141 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
     expect(
       reloaded?.events.filter(({ eventType }) => eventType === 'workflow.status_changed'),
     ).toHaveLength(1);
+  });
+
+  it('cancels an unstarted workflow and records the operator audit atomically', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Canceled order',
+      steps: [{ name: 'Validate' }, { name: 'Charge' }],
+    });
+
+    const canceled = await repository.applyOperatorAction({
+      workflowId: created.workflow.id,
+      action: 'cancel',
+      actor: 'operator@example.com',
+      reason: 'Customer withdrew the order',
+      expectedVersion: 1,
+    });
+
+    expect(canceled?.workflow).toMatchObject({ status: 'canceled', version: 2 });
+    expect(canceled?.tasks.map(({ status }) => status)).toEqual(['canceled', 'canceled']);
+    expect(canceled?.events.at(-1)).toMatchObject({
+      eventType: 'operator.action_applied',
+      data: {
+        action: 'cancel',
+        actor: 'operator@example.com',
+        expectedVersion: 1,
+        resultingVersion: 2,
+      },
+    });
+    await expect(repository.verifyWorkflowHistory(created.workflow.id)).resolves.toMatchObject({
+      valid: true,
+      replayedWorkflowStatus: 'canceled',
+    });
+
+    const audit = await pool.query<{
+      action: string;
+      actor: string;
+      reason: string;
+      expected_version: string;
+      resulting_version: string;
+    }>('SELECT action, actor, reason, expected_version, resulting_version FROM operator_actions');
+    expect(audit.rows).toEqual([
+      {
+        action: 'cancel',
+        actor: 'operator@example.com',
+        reason: 'Customer withdrew the order',
+        expected_version: '1',
+        resulting_version: '2',
+      },
+    ]);
+  });
+
+  it('retries a failed task with a new fence and one additional attempt', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Operator retry',
+      steps: [{ name: 'Call dependency', maxAttempts: 1 }],
+    });
+    const first = await repository.claimTask({
+      workerId: 'worker-before-repair',
+      leaseDurationMs: 30_000,
+    });
+    await repository.failTask({
+      taskId: first!.id,
+      workerId: 'worker-before-repair',
+      generation: first!.generation,
+      error: { code: 'DEPENDENCY_DOWN' },
+      retryable: false,
+      retryDelayMs: 0,
+    });
+    const failed = await repository.getWorkflow(created.workflow.id);
+
+    const retried = await repository.applyOperatorAction({
+      workflowId: created.workflow.id,
+      action: 'retry_failed_task',
+      actor: 'oncall.engineer',
+      reason: 'Dependency health has recovered',
+      expectedVersion: failed!.workflow.version,
+    });
+
+    expect(retried?.workflow).toMatchObject({ status: 'running', version: 4 });
+    expect(retried?.tasks[0]).toMatchObject({
+      status: 'ready',
+      attemptCount: 1,
+      maxAttempts: 2,
+      generation: 2,
+      result: null,
+    });
+
+    const second = await repository.claimTask({
+      workerId: 'worker-after-repair',
+      leaseDurationMs: 30_000,
+    });
+    expect(second).toMatchObject({ attemptCount: 2, generation: 3 });
+    await repository.completeTask({
+      taskId: second!.id,
+      workerId: 'worker-after-repair',
+      generation: second!.generation,
+      result: { recovered: true },
+    });
+    await expect(repository.verifyWorkflowHistory(created.workflow.id)).resolves.toMatchObject({
+      valid: true,
+      replayedWorkflowStatus: 'completed',
+    });
+  });
+
+  it('rejects stale or invalid operator actions without an audit row', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Protected operation',
+      steps: [{ name: 'Only step' }],
+    });
+
+    await expect(
+      repository.applyOperatorAction({
+        workflowId: created.workflow.id,
+        action: 'cancel',
+        actor: 'operator@example.com',
+        reason: 'Request was reviewed and approved',
+        expectedVersion: 2,
+      }),
+    ).rejects.toBeInstanceOf(WorkflowVersionConflictError);
+
+    await repository.claimTask({ workerId: 'active-worker', leaseDurationMs: 30_000 });
+    await expect(
+      repository.applyOperatorAction({
+        workflowId: created.workflow.id,
+        action: 'cancel',
+        actor: 'operator@example.com',
+        reason: 'Request was reviewed and approved',
+        expectedVersion: 2,
+      }),
+    ).rejects.toBeInstanceOf(InvalidOperatorActionError);
+
+    const audit = await pool.query<{ count: string }>(
+      'SELECT count(*) FROM operator_actions WHERE workflow_id = $1',
+      [created.workflow.id],
+    );
+    expect(audit.rows[0]?.count).toBe('0');
   });
 
   it('rolls back all rows when a later task cannot be serialized', async () => {
@@ -667,6 +807,35 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
         'task.compensation_failed',
       ]),
     );
+
+    const repaired = await repository.applyOperatorAction({
+      workflowId: created.workflow.id,
+      action: 'retry_compensation',
+      actor: 'payments.oncall',
+      reason: 'Payment provider has recovered',
+      expectedVersion: reloaded!.workflow.version,
+    });
+    expect(repaired?.workflow.status).toBe('compensating');
+    expect(repaired?.tasks[0]).toMatchObject({
+      status: 'compensating',
+      attemptCount: 2,
+      maxAttempts: 3,
+    });
+
+    const finalRefund = await repository.claimTask({
+      workerId: 'compensator-3',
+      leaseDurationMs: 30_000,
+    });
+    await repository.completeTask({
+      taskId: finalRefund!.id,
+      workerId: 'compensator-3',
+      generation: finalRefund!.generation,
+      result: { refundId: 'refund-after-repair' },
+    });
+    await expect(repository.verifyWorkflowHistory(created.workflow.id)).resolves.toMatchObject({
+      valid: true,
+      replayedWorkflowStatus: 'compensated',
+    });
   });
 
   it('executes a concurrent idempotent effect only once', async () => {

@@ -22,4 +22,11 @@ describe('state machine contracts', () => {
     expect(canTransitionTask('compensating', 'leased')).toBe(true);
     expect(canTransitionTask('leased', 'compensated')).toBe(true);
   });
+
+  it('only allows cancellation before a workflow starts', () => {
+    expect(canTransitionWorkflow('pending', 'canceled')).toBe(true);
+    expect(canTransitionWorkflow('running', 'canceled')).toBe(false);
+    expect(canTransitionTask('ready', 'canceled')).toBe(true);
+    expect(canTransitionTask('completed', 'canceled')).toBe(false);
+  });
 });

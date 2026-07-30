@@ -1,9 +1,11 @@
 import { Pool } from 'pg';
 
 export {
+  InvalidOperatorActionError,
   InvalidStateTransitionError,
   InvalidWorkflowDefinitionError,
   WorkflowRepository,
+  WorkflowVersionConflictError,
 } from './workflow-repository.js';
 export { runMigrations } from './migrations.js';
 export { IdempotencyConflictError, IdempotencyRepository } from './idempotency-repository.js';

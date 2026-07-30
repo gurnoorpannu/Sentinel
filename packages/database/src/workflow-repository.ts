@@ -1,5 +1,7 @@
 import {
   canTransitionWorkflow,
+  operatorActionTypes,
+  type ApplyOperatorActionInput,
   type ClaimTaskInput,
   type CompleteTaskInput,
   type CreateWorkflowInput,
@@ -76,6 +78,10 @@ interface StatusRow extends QueryResultRow {
   status: WorkflowStatus;
 }
 
+interface OperatorWorkflowRow extends StatusRow {
+  version: string;
+}
+
 interface HistoryWorkflowRow extends QueryResultRow {
   status: WorkflowStatus;
   event_sequence: string;
@@ -89,6 +95,11 @@ interface HistoryTaskRow extends QueryResultRow {
 interface CandidateTaskRow extends QueryResultRow {
   id: string;
   workflow_id: string;
+  status: TaskStatus;
+}
+
+interface OperatorTaskRow extends QueryResultRow {
+  id: string;
   status: TaskStatus;
 }
 
@@ -112,6 +123,27 @@ export class InvalidStateTransitionError extends Error {
   ) {
     super(`Workflow cannot transition from ${from} to ${to}`);
     this.name = 'InvalidStateTransitionError';
+  }
+}
+
+export class WorkflowVersionConflictError extends Error {
+  constructor(
+    public readonly expectedVersion: number,
+    public readonly actualVersion: number,
+  ) {
+    super(`Workflow version is ${actualVersion}, expected ${expectedVersion}`);
+    this.name = 'WorkflowVersionConflictError';
+  }
+}
+
+export class InvalidOperatorActionError extends Error {
+  constructor(
+    public readonly action: ApplyOperatorActionInput['action'],
+    public readonly status: WorkflowStatus,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'InvalidOperatorActionError';
   }
 }
 
@@ -332,6 +364,80 @@ export class WorkflowRepository {
       });
 
       const detail = await getWorkflowWithClient(client, workflowId);
+      await client.query('COMMIT');
+      return detail;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async applyOperatorAction(input: ApplyOperatorActionInput): Promise<WorkflowDetail | null> {
+    validateOperatorAction(input);
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      const workflowResult = await client.query<OperatorWorkflowRow>(
+        'SELECT status, version FROM workflows WHERE id = $1 FOR UPDATE',
+        [input.workflowId],
+      );
+      const workflow = workflowResult.rows[0];
+
+      if (!workflow) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+
+      const actualVersion = Number(workflow.version);
+      if (actualVersion !== input.expectedVersion) {
+        throw new WorkflowVersionConflictError(input.expectedVersion, actualVersion);
+      }
+
+      switch (input.action) {
+        case 'cancel':
+          await cancelPendingWorkflow(client, input, workflow.status);
+          break;
+        case 'retry_failed_task':
+          await retryFailedTask(client, input, workflow.status);
+          break;
+        case 'retry_compensation':
+          await retryFailedCompensation(client, input, workflow.status);
+          break;
+      }
+
+      const resultingVersion = input.expectedVersion + 1;
+      await client.query(
+        `
+          INSERT INTO operator_actions (
+            workflow_id, action, actor, reason, expected_version, resulting_version
+          )
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+        [
+          input.workflowId,
+          input.action,
+          input.actor.trim(),
+          input.reason.trim(),
+          input.expectedVersion,
+          resultingVersion,
+        ],
+      );
+      await appendEvent(client, {
+        workflowId: input.workflowId,
+        eventType: 'operator.action_applied',
+        data: {
+          action: input.action,
+          actor: input.actor.trim(),
+          reason: input.reason.trim(),
+          expectedVersion: input.expectedVersion,
+          resultingVersion,
+        },
+      });
+
+      const detail = await getWorkflowWithClient(client, input.workflowId);
       await client.query('COMMIT');
       return detail;
     } catch (error) {
@@ -673,12 +779,245 @@ export class WorkflowRepository {
   }
 }
 
+async function cancelPendingWorkflow(
+  client: PoolClient,
+  input: ApplyOperatorActionInput,
+  status: WorkflowStatus,
+): Promise<void> {
+  if (status !== 'pending') {
+    throw new InvalidOperatorActionError(
+      input.action,
+      status,
+      'Only a pending workflow can be canceled safely',
+    );
+  }
+
+  const tasksResult = await client.query<OperatorTaskRow>(
+    'SELECT id, status FROM tasks WHERE workflow_id = $1 ORDER BY step_number FOR UPDATE',
+    [input.workflowId],
+  );
+  if (tasksResult.rows.some((task) => task.status !== 'ready' && task.status !== 'blocked')) {
+    throw new InvalidOperatorActionError(
+      input.action,
+      status,
+      'Pending workflow contains a task that has already started',
+    );
+  }
+
+  await client.query(
+    `
+      UPDATE tasks
+      SET
+        status = 'canceled',
+        generation = generation + 1,
+        next_attempt_at = NULL,
+        updated_at = now(),
+        completed_at = now()
+      WHERE workflow_id = $1
+    `,
+    [input.workflowId],
+  );
+  for (const task of tasksResult.rows) {
+    await appendEvent(client, {
+      workflowId: input.workflowId,
+      taskId: task.id,
+      eventType: 'task.canceled',
+      data: {
+        actor: input.actor.trim(),
+        reason: input.reason.trim(),
+        from: task.status,
+      },
+    });
+  }
+
+  await updateWorkflowForOperator(client, input, status, 'canceled');
+}
+
+async function retryFailedTask(
+  client: PoolClient,
+  input: ApplyOperatorActionInput,
+  status: WorkflowStatus,
+): Promise<void> {
+  if (status !== 'failed') {
+    throw new InvalidOperatorActionError(
+      input.action,
+      status,
+      'A forward task can only be retried from a failed workflow',
+    );
+  }
+
+  const failedTasks = await client.query<OperatorTaskRow>(
+    `
+      SELECT id, status
+      FROM tasks
+      WHERE workflow_id = $1 AND status = 'failed'
+      ORDER BY step_number
+      FOR UPDATE
+    `,
+    [input.workflowId],
+  );
+  if (failedTasks.rows.length !== 1) {
+    throw new InvalidOperatorActionError(
+      input.action,
+      status,
+      'Failed workflow must contain exactly one failed task',
+    );
+  }
+
+  const task = requireFirstRow(failedTasks.rows, 'Failed workflow has no failed task');
+  await client.query(
+    `
+      UPDATE tasks
+      SET
+        status = 'ready',
+        result = NULL,
+        max_attempts = GREATEST(max_attempts, attempt_count + 1),
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        generation = generation + 1,
+        next_attempt_at = NULL,
+        updated_at = now(),
+        completed_at = NULL
+      WHERE id = $1 AND status = 'failed'
+    `,
+    [task.id],
+  );
+  await appendEvent(client, {
+    workflowId: input.workflowId,
+    taskId: task.id,
+    eventType: 'task.ready',
+    data: {
+      actor: input.actor.trim(),
+      reason: input.reason.trim(),
+      source: 'operator_retry',
+    },
+  });
+
+  await updateWorkflowForOperator(client, input, status, 'running');
+}
+
+async function retryFailedCompensation(
+  client: PoolClient,
+  input: ApplyOperatorActionInput,
+  status: WorkflowStatus,
+): Promise<void> {
+  if (status !== 'compensation_failed') {
+    throw new InvalidOperatorActionError(
+      input.action,
+      status,
+      'Compensation can only be retried from a compensation-failed workflow',
+    );
+  }
+
+  const failedTasks = await client.query<OperatorTaskRow>(
+    `
+      SELECT id, status
+      FROM tasks
+      WHERE workflow_id = $1 AND status = 'compensation_failed'
+      ORDER BY step_number DESC
+      FOR UPDATE
+    `,
+    [input.workflowId],
+  );
+  if (failedTasks.rows.length !== 1) {
+    throw new InvalidOperatorActionError(
+      input.action,
+      status,
+      'Workflow must contain exactly one failed compensation task',
+    );
+  }
+
+  const task = requireFirstRow(failedTasks.rows, 'Workflow has no failed compensation task');
+  await client.query(
+    `
+      UPDATE tasks
+      SET
+        status = 'compensating',
+        result = NULL,
+        max_attempts = GREATEST(max_attempts, attempt_count + 1),
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        generation = generation + 1,
+        next_attempt_at = NULL,
+        updated_at = now(),
+        completed_at = NULL
+      WHERE id = $1 AND status = 'compensation_failed'
+    `,
+    [task.id],
+  );
+  await appendEvent(client, {
+    workflowId: input.workflowId,
+    taskId: task.id,
+    eventType: 'task.compensation_ready',
+    data: {
+      actor: input.actor.trim(),
+      reason: input.reason.trim(),
+      source: 'operator_retry',
+    },
+  });
+
+  await updateWorkflowForOperator(client, input, status, 'compensating');
+}
+
+async function updateWorkflowForOperator(
+  client: PoolClient,
+  input: ApplyOperatorActionInput,
+  from: WorkflowStatus,
+  to: WorkflowStatus,
+): Promise<void> {
+  const result = await client.query(
+    `
+      UPDATE workflows
+      SET
+        status = $2,
+        version = version + 1,
+        updated_at = now(),
+        completed_at = CASE
+          WHEN $2 = 'canceled' THEN now()
+          ELSE NULL
+        END
+      WHERE id = $1 AND status = $3 AND version = $4
+    `,
+    [input.workflowId, to, from, input.expectedVersion],
+  );
+  if (result.rowCount !== 1) {
+    throw new Error(`Workflow ${input.workflowId} changed during operator action`);
+  }
+
+  await appendEvent(client, {
+    workflowId: input.workflowId,
+    eventType: 'workflow.status_changed',
+    data: {
+      from,
+      to,
+      actor: input.actor.trim(),
+      source: 'operator',
+    },
+  });
+}
+
 const taskColumns = `
   id, workflow_id, step_number, name, handler, compensation_handler,
   execution_mode, status, payload, result,
   max_attempts, attempt_count, lease_owner, lease_expires_at,
   generation, next_attempt_at, created_at, updated_at, completed_at
 `;
+
+function validateOperatorAction(input: ApplyOperatorActionInput): void {
+  if (!operatorActionTypes.includes(input.action)) {
+    throw new RangeError('action is not a supported operator action');
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._@-]{0,119}$/.test(input.actor.trim())) {
+    throw new RangeError('actor must be a stable identifier containing 1 to 120 characters');
+  }
+  const reason = input.reason.trim();
+  if (reason.length < 8 || reason.length > 500) {
+    throw new RangeError('reason must contain 8 to 500 characters');
+  }
+  if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 1) {
+    throw new RangeError('expectedVersion must be a positive safe integer');
+  }
+}
 
 function validateDefinition(input: CreateWorkflowInput): void {
   const workflowName = input.name.trim();

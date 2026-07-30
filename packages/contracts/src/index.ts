@@ -6,6 +6,7 @@ export const workflowStatuses = [
   'failed',
   'compensated',
   'compensation_failed',
+  'canceled',
 ] as const;
 
 export type WorkflowStatus = (typeof workflowStatuses)[number];
@@ -20,6 +21,7 @@ export const taskStatuses = [
   'compensating',
   'compensated',
   'compensation_failed',
+  'canceled',
 ] as const;
 
 export type TaskStatus = (typeof taskStatuses)[number];
@@ -164,26 +166,40 @@ export interface FailTaskInput extends LeaseIdentity {
   retryDelayMs: number;
 }
 
+export const operatorActionTypes = ['retry_failed_task', 'retry_compensation', 'cancel'] as const;
+
+export type OperatorActionType = (typeof operatorActionTypes)[number];
+
+export interface ApplyOperatorActionInput {
+  workflowId: string;
+  action: OperatorActionType;
+  actor: string;
+  reason: string;
+  expectedVersion: number;
+}
+
 export const workflowTransitions: Readonly<Record<WorkflowStatus, readonly WorkflowStatus[]>> = {
-  pending: ['running'],
+  pending: ['running', 'canceled'],
   running: ['completed', 'compensating', 'failed'],
   compensating: ['compensated', 'compensation_failed'],
   completed: [],
   failed: [],
   compensated: [],
   compensation_failed: [],
+  canceled: [],
 };
 
 export const taskTransitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
-  blocked: ['ready'],
-  ready: ['leased'],
+  blocked: ['ready', 'canceled'],
+  ready: ['leased', 'canceled'],
   leased: ['completed', 'retry_scheduled', 'failed', 'compensated', 'compensation_failed'],
-  retry_scheduled: ['leased'],
+  retry_scheduled: ['leased', 'canceled'],
   completed: ['compensating'],
   failed: [],
   compensating: ['leased'],
   compensated: [],
   compensation_failed: [],
+  canceled: [],
 };
 
 export function canTransitionWorkflow(from: WorkflowStatus, to: WorkflowStatus): boolean {
