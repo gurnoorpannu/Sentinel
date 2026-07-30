@@ -34,7 +34,8 @@ The worker ownership protocol is explained in
 [sequential orchestration](docs/orchestration.md). Failure recovery is covered in
 [retries and idempotency](docs/retries-and-idempotency.md), while partial rollback is detailed in
 [saga compensation](docs/compensation.md). The operator experience is covered in
-[the dashboard guide](docs/dashboard.md).
+[the dashboard guide](docs/dashboard.md), and the reliability proof is documented in
+[chaos and recovery testing](docs/chaos-testing.md).
 
 ## Repository structure
 
@@ -123,8 +124,9 @@ npm run dev
 
 ## Current milestone
 
-Phase 7 provides a responsive operations dashboard backed by live Sentinel projections. Operators
-can scan workflow health, filter and search recent executions, inspect progress and failures, then
-drill into every durable step, attempt, generation, worker lease, scheduled retry, compensation,
-recorded result, payload field, and audit event. Same-origin dashboard proxies keep service topology
-out of the browser, while loading, empty, missing-workflow, and API-failure states remain explicit.
+Phase 8 provides deterministic failure injection and recovery verification. Development-only chaos
+workflows can inject retryable or permanent faults, heartbeat-free hangs, and worker crashes before
+or after an idempotent effect. PostgreSQL integration tests prove crash recovery does not duplicate
+payment, hung workers are fenced after lease reclamation, retry exhaustion triggers compensation,
+and every recovered workflow can be replayed from its event history without diverging from the live
+projection. The dashboard surfaces that integrity result for operators.

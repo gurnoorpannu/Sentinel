@@ -1035,6 +1035,63 @@ h1 {
   margin-top: 1rem;
 }
 
+.integrity-banner {
+  align-items: flex-start;
+  background: rgba(91, 230, 173, 0.055);
+  border: 1px solid rgba(91, 230, 173, 0.2);
+  border-radius: 0.65rem;
+  color: var(--accent);
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+}
+
+.integrity-icon {
+  align-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  display: flex;
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.62rem;
+  height: 1.4rem;
+  justify-content: center;
+  width: 1.4rem;
+}
+
+.integrity-banner strong {
+  display: block;
+  font-size: 0.68rem;
+}
+
+.integrity-banner p {
+  color: var(--muted);
+  font-size: 0.58rem;
+  line-height: 1.5;
+  margin: 0.25rem 0 0;
+}
+
+.integrity-banner ul {
+  color: var(--danger);
+  font-size: 0.58rem;
+  line-height: 1.5;
+  margin: 0.5rem 0 0;
+  padding-left: 1rem;
+}
+
+.integrity-failed {
+  background: rgba(255, 113, 111, 0.055);
+  border-color: rgba(255, 113, 111, 0.25);
+  color: var(--danger);
+}
+
+.integrity-unavailable {
+  background: rgba(244, 195, 91, 0.045);
+  border-color: rgba(244, 195, 91, 0.18);
+  color: var(--warning);
+}
+
 .execution-panel,
 .timeline-panel,
 .payload-panel {

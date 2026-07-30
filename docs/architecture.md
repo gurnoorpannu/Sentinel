@@ -58,6 +58,11 @@ This decision keeps worker claim queries and state validation straightforward wh
 history to investigate crashes and demonstrate recovery. State and its corresponding event must be
 written in the same PostgreSQL transaction so they cannot diverge.
 
+Phase 8 adds an independent replay verifier. It derives workflow and task states from ordered events,
+checks sequence continuity and the durable event counter, then compares the replay with current
+projections. This is an integrity proof and diagnostic path; workers still use projections for
+normal operation rather than rebuilding state on every restart.
+
 ## Planned execution path
 
 ```mermaid

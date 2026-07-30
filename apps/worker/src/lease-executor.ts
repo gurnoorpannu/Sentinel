@@ -7,7 +7,8 @@ import { calculateBackoff, type RetryPolicy } from './retry-policy.js';
 
 type LeaseStore = Pick<WorkflowRepository, 'renewLease' | 'completeTask' | 'failTask'>;
 
-export type LeaseExecutionOutcome = 'completed' | 'retry_scheduled' | 'failed' | 'fenced';
+export type LeaseExecutionOutcome =
+  'completed' | 'retry_scheduled' | 'failed' | 'fenced' | 'abandoned';
 
 interface ExecuteLeasedTaskOptions {
   repository: LeaseStore;
@@ -19,6 +20,8 @@ interface ExecuteLeasedTaskOptions {
   onHeartbeatError?: (error: unknown) => void;
   retryPolicy?: RetryPolicy;
   isRetryable?: (error: unknown) => boolean;
+  isAbandoned?: (error: unknown) => boolean;
+  heartbeatEnabled?: boolean;
 }
 
 export async function executeLeasedTask({
@@ -35,19 +38,23 @@ export async function executeLeasedTask({
     jitterRatio: 0.2,
   },
   isRetryable = () => false,
+  isAbandoned = () => false,
+  heartbeatEnabled = true,
 }: ExecuteLeasedTaskOptions): Promise<LeaseExecutionOutcome> {
   const heartbeatController = new AbortController();
-  const heartbeat = maintainLease({
-    repository,
-    task,
-    workerId,
-    leaseDurationMs,
-    heartbeatIntervalMs,
-    signal: heartbeatController.signal,
-  }).catch((error: unknown) => {
-    onHeartbeatError?.(error);
-    return false;
-  });
+  const heartbeat = heartbeatEnabled
+    ? maintainLease({
+        repository,
+        task,
+        workerId,
+        leaseDurationMs,
+        heartbeatIntervalMs,
+        signal: heartbeatController.signal,
+      }).catch((error: unknown) => {
+        onHeartbeatError?.(error);
+        return false;
+      })
+    : Promise.resolve(true);
 
   let result: JsonValue | undefined;
   let executionError: unknown;
@@ -61,6 +68,9 @@ export async function executeLeasedTask({
   }
 
   const leaseRemainedCurrent = await heartbeat;
+  if (executionError !== undefined && isAbandoned(executionError)) {
+    return 'abandoned';
+  }
   if (!leaseRemainedCurrent) {
     return 'fenced';
   }

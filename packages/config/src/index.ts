@@ -20,6 +20,10 @@ const environmentSchema = z
     RETRY_BASE_DELAY_MS: z.coerce.number().int().min(100).default(1_000),
     RETRY_MAX_DELAY_MS: z.coerce.number().int().min(100).default(30_000),
     RETRY_JITTER_RATIO: z.coerce.number().min(0).max(1).default(0.2),
+    CHAOS_MODE_ENABLED: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((value) => value === 'true'),
   })
   .superRefine((environment, context) => {
     if (environment.HEARTBEAT_INTERVAL_MS >= environment.LEASE_DURATION_MS) {

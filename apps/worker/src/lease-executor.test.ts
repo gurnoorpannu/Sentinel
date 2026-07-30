@@ -142,6 +142,47 @@ describe('lease-aware task execution', () => {
       }),
     );
   });
+
+  it('abandons an injected crash without settling the leased task', async () => {
+    const task = createLeasedTask();
+    const repository = createRepository(task);
+    const crash = new Error('simulated process exit');
+
+    const outcome = await executeLeasedTask({
+      repository,
+      task,
+      workerId: 'worker-a',
+      leaseDurationMs: 30_000,
+      heartbeatIntervalMs: 10_000,
+      execute: async () => {
+        throw crash;
+      },
+      isAbandoned: (error) => error === crash,
+    });
+
+    expect(outcome).toBe('abandoned');
+    expect(repository.completeTask).not.toHaveBeenCalled();
+    expect(repository.failTask).not.toHaveBeenCalled();
+  });
+
+  it('can disable heartbeats so a hung attempt is fenced at completion', async () => {
+    const task = createLeasedTask();
+    const repository = createRepository(task);
+    repository.completeTask.mockResolvedValue(null);
+
+    const outcome = await executeLeasedTask({
+      repository,
+      task,
+      workerId: 'worker-a',
+      leaseDurationMs: 100,
+      heartbeatIntervalMs: 1,
+      heartbeatEnabled: false,
+      execute: async () => ({ accepted: true }),
+    });
+
+    expect(outcome).toBe('fenced');
+    expect(repository.renewLease).not.toHaveBeenCalled();
+  });
 });
 
 function createRepository(task: Task) {

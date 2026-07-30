@@ -76,6 +76,16 @@ interface WorkflowDetail {
   }>;
 }
 
+interface HistoryIntegrityReport {
+  workflowId: string;
+  valid: boolean;
+  eventCount: number;
+  latestSequence: number;
+  replayedWorkflowStatus: WorkflowStatus;
+  replayedTaskStatuses: Array<{ taskId: string; status: TaskStatus }>;
+  issues: Array<{ code: string; message: string; sequence?: number; taskId?: string }>;
+}
+
 const workflowLabels: Record<WorkflowStatus, string> = {
   pending: 'Pending',
   running: 'Running',
@@ -102,6 +112,7 @@ export default function WorkflowDetailPage() {
   const parameters = useParams<{ workflowId: string }>();
   const workflowId = parameters.workflowId;
   const [detail, setDetail] = useState<WorkflowDetail | null>(null);
+  const [historyReport, setHistoryReport] = useState<HistoryIntegrityReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,9 +125,14 @@ export default function WorkflowDetailPage() {
         setLoading(true);
       }
       try {
-        const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
-          cache: 'no-store',
-        });
+        const [response, historyResponse] = await Promise.all([
+          fetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
+            cache: 'no-store',
+          }),
+          fetch(`/api/workflows/${encodeURIComponent(workflowId)}/history-integrity`, {
+            cache: 'no-store',
+          }),
+        ]);
         if (response.status === 404) {
           throw new Error('Workflow not found');
         }
@@ -124,6 +140,9 @@ export default function WorkflowDetailPage() {
           throw new Error('Sentinel API is unavailable');
         }
         setDetail((await response.json()) as WorkflowDetail);
+        setHistoryReport(
+          historyResponse.ok ? ((await historyResponse.json()) as HistoryIntegrityReport) : null,
+        );
         setError(null);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : 'Unable to load workflow');
@@ -167,6 +186,7 @@ export default function WorkflowDetailPage() {
     <DetailShell title={detail.workflow.name}>
       <WorkflowDetailView
         detail={detail}
+        historyReport={historyReport}
         refreshing={refreshing}
         onRefresh={() => void loadDetail(true)}
       />
@@ -229,10 +249,12 @@ function DetailShell({ title, children }: { title: string; children: React.React
 
 function WorkflowDetailView({
   detail,
+  historyReport,
   refreshing,
   onRefresh,
 }: {
   detail: WorkflowDetail;
+  historyReport: HistoryIntegrityReport | null;
   refreshing: boolean;
   onRefresh: () => void;
 }) {
@@ -276,6 +298,8 @@ function WorkflowDetailView({
         <DetailMetric label="Version" value={`v${workflow.version}`} detail="projection version" />
       </section>
 
+      <HistoryIntegrity report={historyReport} />
+
       <div className="detail-grid">
         <section className="execution-panel">
           <div className="section-heading">
@@ -318,6 +342,42 @@ function WorkflowDetailView({
         <PayloadGrid payload={workflow.payload} />
       </section>
     </div>
+  );
+}
+
+function HistoryIntegrity({ report }: { report: HistoryIntegrityReport | null }) {
+  if (!report) {
+    return (
+      <section className="integrity-banner integrity-unavailable">
+        <span className="integrity-icon">?</span>
+        <div>
+          <strong>History verification unavailable</strong>
+          <p>The live projection is visible, but its event replay could not be checked.</p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className={report.valid ? 'integrity-banner' : 'integrity-banner integrity-failed'}>
+      <span className="integrity-icon">{report.valid ? '✓' : '!'}</span>
+      <div>
+        <strong>
+          {report.valid ? 'Event history verified' : 'Projection divergence detected'}
+        </strong>
+        <p>
+          Replayed {report.eventCount} events through sequence {report.latestSequence} · workflow{' '}
+          {report.replayedWorkflowStatus}
+        </p>
+        {report.issues.length > 0 ? (
+          <ul>
+            {report.issues.map((issue, index) => (
+              <li key={`${issue.code}-${issue.sequence ?? index}`}>{issue.message}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </section>
   );
 }
 

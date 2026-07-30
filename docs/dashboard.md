@@ -29,10 +29,15 @@ shows:
 - scheduled retry eligibility;
 - persisted success or failure results;
 - workflow payload fields; and
+- event-history replay integrity; and
 - the immutable event timeline in reverse chronological order.
 
 Timeline treatments distinguish normal transitions, successful completion, retries, compensation,
 and terminal failures without hiding the underlying event sequence or worker identity.
+
+The integrity banner is computed independently from the projection. A verified result means event
+sequences are contiguous and replay to the same workflow/task states. A divergence result lists the
+specific sequence, reference, counter, or projection mismatch.
 
 ## Service boundary
 

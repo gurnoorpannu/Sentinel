@@ -116,6 +116,43 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
     expect(runningOnly[0]?.workflow.id).toBe(running.workflow.id);
   });
 
+  it('replays event history and detects projection divergence', async () => {
+    const created = await repository.createWorkflow({
+      name: 'History verification',
+      steps: [{ name: 'Only step' }],
+    });
+    const task = await repository.claimTask({
+      workerId: 'history-worker',
+      leaseDurationMs: 30_000,
+    });
+    await repository.completeTask({
+      taskId: task!.id,
+      workerId: 'history-worker',
+      generation: task!.generation,
+      result: { accepted: true },
+    });
+
+    const valid = await repository.verifyWorkflowHistory(created.workflow.id);
+    expect(valid).toMatchObject({
+      valid: true,
+      replayedWorkflowStatus: 'completed',
+      replayedTaskStatuses: [{ taskId: task!.id, status: 'completed' }],
+      issues: [],
+    });
+
+    await pool.query("UPDATE tasks SET status = 'failed' WHERE id = $1", [task!.id]);
+    const divergent = await repository.verifyWorkflowHistory(created.workflow.id);
+    expect(divergent?.valid).toBe(false);
+    expect(divergent?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'TASK_PROJECTION_MISMATCH',
+          taskId: task!.id,
+        }),
+      ]),
+    );
+  });
+
   it('rejects invalid transitions without changing state or appending an event', async () => {
     const created = await repository.createWorkflow({
       name: 'Transition test',

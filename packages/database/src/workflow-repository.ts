@@ -13,10 +13,13 @@ import {
   type Workflow,
   type WorkflowDetail,
   type WorkflowEvent,
+  type WorkflowHistoryReport,
   type WorkflowSummary,
   type WorkflowStatus,
 } from '@sentinel/contracts';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
+
+import { verifyWorkflowHistory } from './workflow-history.js';
 
 interface WorkflowRow extends QueryResultRow {
   id: string;
@@ -71,6 +74,16 @@ interface EventRow extends QueryResultRow {
 
 interface StatusRow extends QueryResultRow {
   status: WorkflowStatus;
+}
+
+interface HistoryWorkflowRow extends QueryResultRow {
+  status: WorkflowStatus;
+  event_sequence: string;
+}
+
+interface HistoryTaskRow extends QueryResultRow {
+  id: string;
+  status: TaskStatus;
 }
 
 interface CandidateTaskRow extends QueryResultRow {
@@ -225,6 +238,47 @@ export class WorkflowRepository {
     const client = await this.pool.connect();
     try {
       return await getWorkflowWithClient(client, workflowId);
+    } finally {
+      client.release();
+    }
+  }
+
+  async verifyWorkflowHistory(workflowId: string): Promise<WorkflowHistoryReport | null> {
+    const client = await this.pool.connect();
+    try {
+      const workflowResult = await client.query<HistoryWorkflowRow>(
+        'SELECT status, event_sequence FROM workflows WHERE id = $1',
+        [workflowId],
+      );
+      const workflow = workflowResult.rows[0];
+      if (!workflow) {
+        return null;
+      }
+
+      const [taskResult, eventResult] = await Promise.all([
+        client.query<HistoryTaskRow>(
+          'SELECT id, status FROM tasks WHERE workflow_id = $1 ORDER BY step_number',
+          [workflowId],
+        ),
+        client.query<EventRow>(
+          `
+            SELECT
+              id, workflow_id, task_id, sequence, event_type, data, occurred_at
+            FROM workflow_events
+            WHERE workflow_id = $1
+            ORDER BY sequence
+          `,
+          [workflowId],
+        ),
+      ]);
+
+      return verifyWorkflowHistory({
+        workflowId,
+        workflowStatus: workflow.status,
+        eventSequence: Number(workflow.event_sequence),
+        tasks: taskResult.rows,
+        events: eventResult.rows.map(mapEvent),
+      });
     } finally {
       client.release();
     }

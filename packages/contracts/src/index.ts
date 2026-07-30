@@ -24,6 +24,16 @@ export const taskStatuses = [
 
 export type TaskStatus = (typeof taskStatuses)[number];
 
+export const failureInjectionModes = [
+  'retryable',
+  'permanent',
+  'hang',
+  'crash_before_effect',
+  'crash_after_effect',
+] as const;
+
+export type FailureInjectionMode = (typeof failureInjectionModes)[number];
+
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
@@ -97,6 +107,30 @@ export interface WorkflowEvent {
   eventType: string;
   data: JsonObject;
   occurredAt: Date;
+}
+
+export interface WorkflowHistoryIssue {
+  code:
+    | 'SEQUENCE_GAP'
+    | 'EVENT_COUNT_MISMATCH'
+    | 'INVALID_WORKFLOW_TRANSITION'
+    | 'INVALID_TASK_TRANSITION'
+    | 'MISSING_TASK_REFERENCE'
+    | 'WORKFLOW_PROJECTION_MISMATCH'
+    | 'TASK_PROJECTION_MISMATCH';
+  message: string;
+  sequence?: number;
+  taskId?: string;
+}
+
+export interface WorkflowHistoryReport {
+  workflowId: string;
+  valid: boolean;
+  eventCount: number;
+  latestSequence: number;
+  replayedWorkflowStatus: WorkflowStatus;
+  replayedTaskStatuses: Array<{ taskId: string; status: TaskStatus }>;
+  issues: WorkflowHistoryIssue[];
 }
 
 export interface WorkflowDetail {
