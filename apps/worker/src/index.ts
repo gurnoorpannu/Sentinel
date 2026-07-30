@@ -1,8 +1,8 @@
-import { setTimeout as delay } from 'node:timers/promises';
-
 import { loadEnvironment } from '@sentinel/config';
+import type { Task } from '@sentinel/contracts';
 import { createDatabasePool, IdempotencyRepository, WorkflowRepository } from '@sentinel/database';
 
+import { runBoundedWorker } from './bounded-worker.js';
 import { createDefaultHandlerRegistry } from './ecommerce-handlers.js';
 import {
   disablesHeartbeat,
@@ -29,74 +29,89 @@ async function verifyDatabaseConnection(): Promise<void> {
 }
 
 async function workerLoop(): Promise<void> {
-  while (!stopping) {
-    const task = await repository.claimTask({
-      workerId: environment.WORKER_ID,
-      leaseDurationMs: environment.LEASE_DURATION_MS,
-    });
-
-    if (!task) {
-      await delay(environment.WORKER_POLL_INTERVAL_MS);
-      continue;
-    }
-
-    process.stdout.write(
-      `[${environment.WORKER_ID}] Claimed task ${task.id} at generation ${task.generation}\n`,
-    );
-
-    const failureInjection = readFailureInjection(task);
-    const outcome = await executeLeasedTask({
-      repository,
-      task,
-      workerId: environment.WORKER_ID,
-      leaseDurationMs: environment.LEASE_DURATION_MS,
-      heartbeatIntervalMs: environment.HEARTBEAT_INTERVAL_MS,
-      execute: async (leasedTask) =>
-        await executeWithFailureInjection(
-          leasedTask,
-          async (injectedTask) => await handlers.execute(injectedTask),
-        ),
-      heartbeatEnabled: !disablesHeartbeat(failureInjection),
-      retryPolicy: {
-        baseDelayMs: environment.RETRY_BASE_DELAY_MS,
-        maxDelayMs: environment.RETRY_MAX_DELAY_MS,
-        jitterRatio: environment.RETRY_JITTER_RATIO,
-      },
-      isRetryable: (error) => error instanceof RetryableTaskError,
-      isAbandoned: (error) => error instanceof InjectedWorkerCrashError,
-      onHeartbeatError: (error) => {
-        process.stderr.write(
-          `[${environment.WORKER_ID}] Lease heartbeat failed for ${task.id}: ${String(error)}\n`,
-        );
-      },
-    });
-
-    process.stdout.write(
-      `[${environment.WORKER_ID}] Task ${task.id} finished with outcome ${outcome}\n`,
-    );
-
-    if (outcome === 'abandoned') {
-      process.stderr.write(
-        `[${environment.WORKER_ID}] Injected crash abandoned task ${task.id}; lease recovery required\n`,
+  await runBoundedWorker({
+    repository,
+    workerId: environment.WORKER_ID,
+    concurrency: environment.WORKER_CONCURRENCY,
+    leaseDurationMs: environment.LEASE_DURATION_MS,
+    pollIntervalMs: environment.WORKER_POLL_INTERVAL_MS,
+    shouldStop: () => stopping,
+    requestStop: (outcome) => {
+      if (outcome === 'abandoned') {
+        process.exitCode = 86;
+      }
+      beginStopping(
+        outcome === 'abandoned'
+          ? 'Injected crash requested worker shutdown'
+          : 'Unexpected task execution failure requested worker shutdown',
       );
-      process.exitCode = 86;
-      stopping = true;
-    }
-  }
+    },
+    execute: executeTask,
+    onClaim: (task, inFlight) => {
+      process.stdout.write(
+        `[${environment.WORKER_ID}] Claimed task ${task.id} at generation ${task.generation} (${inFlight}/${environment.WORKER_CONCURRENCY} slots)\n`,
+      );
+    },
+    onOutcome: (task, outcome, inFlight) => {
+      process.stdout.write(
+        `[${environment.WORKER_ID}] Task ${task.id} finished with outcome ${outcome} (${inFlight}/${environment.WORKER_CONCURRENCY} slots)\n`,
+      );
+      if (outcome === 'abandoned') {
+        process.stderr.write(
+          `[${environment.WORKER_ID}] Injected crash abandoned task ${task.id}; lease recovery required\n`,
+        );
+      }
+    },
+    onError: (task, error) => {
+      process.stderr.write(
+        `[${environment.WORKER_ID}] Unexpected failure while executing ${task.id}: ${String(error)}\n`,
+      );
+    },
+  });
+}
+
+async function executeTask(task: Task) {
+  const failureInjection = readFailureInjection(task);
+  return await executeLeasedTask({
+    repository,
+    task,
+    workerId: environment.WORKER_ID,
+    leaseDurationMs: environment.LEASE_DURATION_MS,
+    heartbeatIntervalMs: environment.HEARTBEAT_INTERVAL_MS,
+    execute: async (leasedTask) =>
+      await executeWithFailureInjection(
+        leasedTask,
+        async (injectedTask) => await handlers.execute(injectedTask),
+      ),
+    heartbeatEnabled: !disablesHeartbeat(failureInjection),
+    retryPolicy: {
+      baseDelayMs: environment.RETRY_BASE_DELAY_MS,
+      maxDelayMs: environment.RETRY_MAX_DELAY_MS,
+      jitterRatio: environment.RETRY_JITTER_RATIO,
+    },
+    isRetryable: (error) => error instanceof RetryableTaskError,
+    isAbandoned: (error) => error instanceof InjectedWorkerCrashError,
+    onHeartbeatError: (error) => {
+      process.stderr.write(
+        `[${environment.WORKER_ID}] Lease heartbeat failed for ${task.id}: ${String(error)}\n`,
+      );
+    },
+  });
 }
 
 function shutdown(signal: NodeJS.Signals): void {
-  if (stopping) {
-    return;
-  }
+  beginStopping(`Received ${signal}; shutting down`);
+}
 
+function beginStopping(message: string): void {
+  if (stopping) return;
   stopping = true;
-  process.stdout.write(`[${environment.WORKER_ID}] Received ${signal}; shutting down\n`);
+  process.stdout.write(`[${environment.WORKER_ID}] ${message}\n`);
   shutdownTimer = setTimeout(() => {
     process.stderr.write(
       `[${environment.WORKER_ID}] Shutdown grace period expired; abandoning in-flight work\n`,
     );
-    process.exit(1);
+    process.exit(process.exitCode || 1);
   }, environment.SHUTDOWN_GRACE_PERIOD_MS);
   shutdownTimer.unref();
 }
