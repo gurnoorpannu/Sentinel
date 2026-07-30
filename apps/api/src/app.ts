@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { ApiMetrics } from './metrics.js';
+import { openApiDocument } from './openapi.js';
 import { registerWorkflowRoutes, type WorkflowStore } from './workflow-routes.js';
 
 export interface DatabaseProbe {
@@ -64,9 +65,12 @@ export function buildApp({
 
   app.get('/', async () => ({
     name: 'Sentinel API',
-    phase: 11,
+    version: '0.1.0',
     status: 'running',
+    documentation: '/openapi.json',
   }));
+
+  app.get('/openapi.json', async () => openApiDocument);
 
   app.get('/health', async (_request, reply) => {
     try {
