@@ -35,7 +35,8 @@ The worker ownership protocol is explained in
 [retries and idempotency](docs/retries-and-idempotency.md), while partial rollback is detailed in
 [saga compensation](docs/compensation.md). The operator experience is covered in
 [the dashboard guide](docs/dashboard.md), and the reliability proof is documented in
-[chaos and recovery testing](docs/chaos-testing.md).
+[chaos and recovery testing](docs/chaos-testing.md). Production operations are covered by
+[the deployment and operations runbook](docs/production.md).
 
 ## Repository structure
 
@@ -124,9 +125,9 @@ npm run dev
 
 ## Current milestone
 
-Phase 8 provides deterministic failure injection and recovery verification. Development-only chaos
-workflows can inject retryable or permanent faults, heartbeat-free hangs, and worker crashes before
-or after an idempotent effect. PostgreSQL integration tests prove crash recovery does not duplicate
-payment, hung workers are fenced after lease reclamation, retry exhaustion triggers compensation,
-and every recovered workflow can be replayed from its event history without diverging from the live
-projection. The dashboard surfaces that integrity result for operators.
+Phase 9 provides a production-ready runtime and deployment handoff. API liveness is independent from
+PostgreSQL, readiness verifies the required schema, and API/worker shutdown is bounded and
+lease-safe. Token-protected Prometheus metrics expose HTTP and durable workflow health. Separate
+minimal service and dashboard images run as non-root with production dependencies only. Compose and
+Kubernetes deployments use read-only filesystems, dropped capabilities, resource limits, probes,
+external secrets, managed PostgreSQL, and migration jobs. CI builds and smoke-tests both images.
