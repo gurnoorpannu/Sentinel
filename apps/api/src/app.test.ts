@@ -94,6 +94,69 @@ describe('API health endpoint', () => {
     });
     await app.close();
   });
+
+  it('exposes operational metrics only with the configured bearer token', async () => {
+    const database = {
+      query: vi.fn().mockResolvedValue({
+        rows: [
+          {
+            workflows_total: '3',
+            workflows_pending: '1',
+            workflows_running: '1',
+            workflows_compensating: '0',
+            workflows_completed: '1',
+            workflows_failed: '0',
+            workflows_compensated: '0',
+            workflows_compensation_failed: '0',
+            tasks_ready: '1',
+            tasks_leased: '1',
+            tasks_retry_scheduled: '0',
+            tasks_compensating: '0',
+            tasks_expired_leases: '0',
+            workflow_events_total: '12',
+            idempotency_records_total: '2',
+          },
+        ],
+      }),
+    };
+    const app = buildApp({
+      database,
+      workflows: createWorkflowStore(),
+      logger: false,
+      metricsToken: 'test-metrics-token',
+    });
+
+    await app.inject({ method: 'GET', url: '/live' });
+    const unauthorized = await app.inject({ method: 'GET', url: '/metrics' });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/metrics',
+      headers: { authorization: 'Bearer test-metrics-token' },
+    });
+
+    expect(unauthorized.statusCode).toBe(401);
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/plain');
+    expect(response.body).toContain(
+      'sentinel_api_requests_total{method="GET",route="/live",status="200"} 1',
+    );
+    expect(response.body).toContain('sentinel_workflows{status="running"} 1');
+    expect(response.body).toContain('sentinel_workflow_events_total 12');
+    await app.close();
+  });
+
+  it('does not register the metrics route without a token', async () => {
+    const app = buildApp({
+      database: { query: vi.fn() },
+      workflows: createWorkflowStore(),
+      logger: false,
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/metrics' });
+
+    expect(response.statusCode).toBe(404);
+    await app.close();
+  });
 });
 
 describe('workflow endpoints', () => {

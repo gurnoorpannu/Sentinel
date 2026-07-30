@@ -24,4 +24,11 @@ describe('worker lease configuration', () => {
     expect(loadEnvironment({}).CHAOS_MODE_ENABLED).toBe(false);
     expect(loadEnvironment({ CHAOS_MODE_ENABLED: 'true' }).CHAOS_MODE_ENABLED).toBe(true);
   });
+
+  it('rejects short metrics tokens', () => {
+    expect(() => loadEnvironment({ METRICS_TOKEN: 'too-short' })).toThrow();
+    expect(loadEnvironment({ METRICS_TOKEN: 'long-enough-token' }).METRICS_TOKEN).toBe(
+      'long-enough-token',
+    );
+  });
 });

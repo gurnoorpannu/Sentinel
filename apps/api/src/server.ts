@@ -15,6 +15,7 @@ const app = buildApp({
   isShuttingDown: () => shuttingDown,
   requestTimeoutMs: environment.API_REQUEST_TIMEOUT_MS,
   keepAliveTimeoutMs: environment.API_KEEP_ALIVE_TIMEOUT_MS,
+  metricsToken: environment.METRICS_TOKEN,
 });
 
 app.addHook('onClose', async () => {

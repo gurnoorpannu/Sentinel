@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 
+import { ApiMetrics } from './metrics.js';
 import { registerWorkflowRoutes, type WorkflowStore } from './workflow-routes.js';
 
 export interface DatabaseProbe {
@@ -14,6 +15,7 @@ interface BuildAppOptions {
   isShuttingDown?: () => boolean;
   requestTimeoutMs?: number;
   keepAliveTimeoutMs?: number;
+  metricsToken?: string | undefined;
 }
 
 const readinessQuery = `
@@ -37,11 +39,25 @@ export function buildApp({
   isShuttingDown = () => false,
   requestTimeoutMs = 30_000,
   keepAliveTimeoutMs = 72_000,
+  metricsToken,
 }: BuildAppOptions): FastifyInstance {
   const app = Fastify({
     logger,
     requestTimeout: requestTimeoutMs,
     keepAliveTimeout: keepAliveTimeoutMs,
+  });
+  const metrics = new ApiMetrics();
+
+  app.addHook('onResponse', (request, reply, done) => {
+    if (request.routeOptions.url !== '/metrics') {
+      metrics.recordRequest(
+        request.method,
+        request.routeOptions.url ?? 'unknown',
+        reply.statusCode,
+        reply.elapsedTime,
+      );
+    }
+    done();
   });
 
   app.get('/', async () => ({
@@ -110,6 +126,22 @@ export function buildApp({
       });
     }
   });
+
+  if (metricsToken) {
+    app.get('/metrics', async (request, reply) => {
+      if (request.headers.authorization !== `Bearer ${metricsToken}`) {
+        return reply.status(401).send({
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'A valid metrics bearer token is required',
+          },
+        });
+      }
+
+      const body = await metrics.render(database);
+      return reply.type('text/plain; version=0.0.4; charset=utf-8').send(body);
+    });
+  }
 
   registerWorkflowRoutes(app, workflows, { chaosEnabled });
 
