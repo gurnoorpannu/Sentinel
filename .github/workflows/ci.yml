@@ -34,3 +34,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build service image
+        run: docker build --target service --tag sentinel-service:test .
+      - name: Build dashboard image
+        run: docker build --target dashboard --tag sentinel-dashboard:test .
+      - name: Verify non-root runtime
+        run: |
+          docker run --rm --entrypoint node sentinel-service:test \
+            -e "if (process.getuid?.() === 0) process.exit(1)"
+          docker run --rm --entrypoint node sentinel-dashboard:test \
+            -e "if (process.getuid?.() === 0) process.exit(1)"
