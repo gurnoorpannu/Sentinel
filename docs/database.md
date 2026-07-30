@@ -1,7 +1,6 @@
 # Durable data model
 
-Phase 2 introduces the operational model that later queue, retry, and compensation phases build on.
-PostgreSQL owns both current state and the append-only audit history.
+PostgreSQL owns both the current operational state and the append-only audit history.
 
 ## Tables
 

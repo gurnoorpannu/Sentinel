@@ -1,7 +1,7 @@
 # Retries and idempotency
 
-Phase 5 handles temporary downstream failures without hammering a struggling service or repeating a
-successful external effect.
+Sentinel handles temporary downstream failures without hammering a struggling service or repeating
+a successful external effect.
 
 ## Retry classification
 

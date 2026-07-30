@@ -1,7 +1,7 @@
 # Leasing and generation fencing
 
-Phase 3 turns PostgreSQL into Sentinel's durable task queue. Workers coordinate only through database
-transactions; no worker is trusted to decide that it still owns a task.
+PostgreSQL is Sentinel's durable task queue. Workers coordinate only through database transactions;
+no worker is trusted to decide that it still owns a task.
 
 ## Atomic claiming
 
@@ -81,12 +81,12 @@ The stale completion produces no state change and no event.
 ## External side effects
 
 Generation fencing protects Sentinel's PostgreSQL state. It cannot undo an external payment or
-inventory call that Worker A made before stalling. Phase 5 adds stable idempotency keys to protect
-those downstream effects independently.
+inventory call that Worker A made before stalling. Stable idempotency keys protect those downstream
+effects independently.
 
-## Current boundary
+## Concurrent execution
 
-Phase 3 workers use a placeholder acknowledgement handler after claiming a task. Phase 4 adds the
-real handler registry and activates the next ordered step after fenced completion. Retry exhaustion
-and backoff arrive in Phase 5; until then, a task that consumes its maximum attempts is no longer
-claimable and remains visible for diagnosis.
+Each worker runs a bounded number of leases concurrently. A process claims only while an execution
+slot is available, maintains a separate heartbeat for each active lease, and stops claiming
+immediately during shutdown. Database pool validation reserves capacity beyond the execution slots
+so claiming, heartbeats, and settlement cannot deadlock behind handlers.

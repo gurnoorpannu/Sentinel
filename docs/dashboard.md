@@ -1,8 +1,8 @@
 # Operations dashboard
 
-Phase 7 turns Sentinel's durable projections and event history into an operator-facing control
-room. Normal inspection is read-only, while explicit recovery uses only authenticated,
-state-restricted operator commands.
+The dashboard turns Sentinel's durable projections and event history into an operator-facing
+control room. Normal inspection is read-only, while explicit recovery uses only authenticated,
+state-restricted commands.
 
 ## Workflow overview
 

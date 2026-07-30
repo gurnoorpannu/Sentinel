@@ -1,6 +1,6 @@
 # Sequential orchestration
 
-Phase 4 turns individually safe tasks into a complete ordered workflow.
+Sentinel composes individually fenced tasks into a complete ordered workflow.
 
 ## Persisted handler identity
 
@@ -64,10 +64,11 @@ can be added when workflow dataflow becomes a project requirement.
 
 While a task is leased, every later task remains blocked. Competing workers receive no claimable
 task for that workflow. Once completion and activation commit, exactly one worker can claim the next
-step through the Phase 3 `SKIP LOCKED` protocol.
+step through the same `SKIP LOCKED` claim protocol.
 
-## Current boundary
+## Failure boundary
 
-The simulated handlers are successful on valid input. A handler error currently marks its task
-failed. Phase 5 will distinguish retryable failures, schedule exponential backoff, and add
-idempotency protection for the simulated external effects.
+Handlers classify errors as retryable or permanent. Retryable failures schedule exponential
+backoff; terminal failures either end the workflow or activate reverse-order compensation.
+External-effect handlers use stable idempotency keys so recovery does not duplicate an already
+completed effect.

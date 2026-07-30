@@ -1,8 +1,7 @@
 # Production deployment and operations
 
-Phase 9 turns Sentinel's verified orchestration core into a deployable service. The supplied
-Kubernetes manifests are a secure baseline, not a substitute for environment-specific networking,
-TLS, identity, backup, and policy controls.
+The supplied production images and Kubernetes manifests are a secure baseline, not a substitute for
+environment-specific networking, TLS, identity, backup, and policy controls.
 
 ## Runtime images
 
