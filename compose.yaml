@@ -1,0 +1,78 @@
+name: sentinel
+
+x-app: &app
+  build:
+    context: .
+  environment: &app-environment
+    NODE_ENV: development
+    LOG_LEVEL: info
+    DATABASE_URL: postgresql://sentinel:sentinel@postgres:5432/sentinel
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: sentinel
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U sentinel -d sentinel']
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    ports:
+      - '5432:5432'
+    volumes:
+      - sentinel-postgres:/var/lib/postgresql/data
+
+  migrate:
+    <<: *app
+    command: npm run db:migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    <<: *app
+    command: npm run start -w @sentinel/api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-environment
+      API_HOST: 0.0.0.0
+      API_PORT: 4000
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:4000/health || exit 1']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - '4000:4000'
+
+  worker:
+    <<: *app
+    command: npm run start -w @sentinel/worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-environment
+      WORKER_ID: worker-compose-1
+      WORKER_POLL_INTERVAL_MS: 1000
+
+  dashboard:
+    <<: *app
+    command: npm run start -w @sentinel/dashboard
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+    ports:
+      - '3000:3000'
+
+volumes:
+  sentinel-postgres:
