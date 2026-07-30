@@ -122,12 +122,3 @@ migrations, and launch the development processes:
 npm run db:migrate
 npm run dev
 ```
-
-## Current milestone
-
-Phase 9 provides a production-ready runtime and deployment handoff. API liveness is independent from
-PostgreSQL, readiness verifies the required schema, and API/worker shutdown is bounded and
-lease-safe. Token-protected Prometheus metrics expose HTTP and durable workflow health. Separate
-minimal service and dashboard images run as non-root with production dependencies only. Compose and
-Kubernetes deployments use read-only filesystems, dropped capabilities, resource limits, probes,
-external secrets, managed PostgreSQL, and migration jobs. CI builds and smoke-tests both images.
