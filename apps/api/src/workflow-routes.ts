@@ -1,17 +1,29 @@
 import {
   failureInjectionModes,
+  operatorActionTypes,
   workflowStatuses,
   type CreateWorkflowInput,
   type WorkflowDetail,
   type WorkflowSummary,
 } from '@sentinel/contracts';
-import { InvalidWorkflowDefinitionError, type WorkflowRepository } from '@sentinel/database';
+import {
+  InvalidOperatorActionError,
+  InvalidWorkflowDefinitionError,
+  WorkflowVersionConflictError,
+  type WorkflowRepository,
+} from '@sentinel/database';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z, ZodError } from 'zod';
 
+import { hasValidOperatorToken } from './operator-auth.js';
+
 export type WorkflowStore = Pick<
   WorkflowRepository,
-  'createWorkflow' | 'getWorkflow' | 'listWorkflows' | 'verifyWorkflowHistory'
+  | 'applyOperatorAction'
+  | 'createWorkflow'
+  | 'getWorkflow'
+  | 'listWorkflows'
+  | 'verifyWorkflowHistory'
 >;
 
 const jsonObjectSchema = z.record(z.string(), z.json());
@@ -41,6 +53,17 @@ const createWorkflowSchema = z.object({
 
 const workflowParametersSchema = z.object({
   workflowId: z.uuid(),
+});
+
+const operatorActorSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9._@-]{0,119}$/);
+
+const operatorActionSchema = z.object({
+  action: z.enum(operatorActionTypes),
+  reason: z.string().trim().min(8).max(500),
+  expectedVersion: z.number().int().positive(),
 });
 
 const listWorkflowsQuerySchema = z.object({
@@ -77,7 +100,7 @@ const chaosWorkflowSchema = ecommerceWorkflowSchema.extend({
 export function registerWorkflowRoutes(
   app: FastifyInstance,
   workflows: WorkflowStore,
-  options: { chaosEnabled?: boolean } = {},
+  options: { chaosEnabled?: boolean; operatorToken?: string | undefined } = {},
 ): void {
   app.get('/workflows', async (request, reply) => {
     const query = listWorkflowsQuerySchema.safeParse(request.query);
@@ -246,6 +269,76 @@ export function registerWorkflowRoutes(
 
     return report;
   });
+
+  const operatorToken = options.operatorToken;
+  if (operatorToken) {
+    app.post('/workflows/:workflowId/operator-actions', async (request, reply) => {
+      if (!hasValidOperatorToken(request.headers.authorization, operatorToken)) {
+        return reply.status(401).send({
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'A valid operator bearer token is required',
+          },
+        });
+      }
+
+      const parsedParameters = workflowParametersSchema.safeParse(request.params);
+      const parsedActor = operatorActorSchema.safeParse(request.headers['x-operator-id']);
+      const parsedAction = operatorActionSchema.safeParse(request.body);
+      if (!parsedParameters.success || !parsedActor.success || !parsedAction.success) {
+        return reply.status(400).send({
+          error: {
+            code: 'INVALID_OPERATOR_ACTION',
+            message: 'Operator action, identity, or workflow ID is invalid',
+            details: [
+              ...(parsedParameters.error?.issues ?? []),
+              ...(parsedActor.error?.issues ?? []),
+              ...(parsedAction.error?.issues ?? []),
+            ],
+          },
+        });
+      }
+
+      try {
+        const detail = await workflows.applyOperatorAction({
+          workflowId: parsedParameters.data.workflowId,
+          actor: parsedActor.data,
+          ...parsedAction.data,
+        });
+        if (!detail) {
+          return reply.status(404).send({
+            error: {
+              code: 'WORKFLOW_NOT_FOUND',
+              message: 'Workflow not found',
+            },
+          });
+        }
+        return serializeWorkflowDetail(detail);
+      } catch (error) {
+        if (error instanceof WorkflowVersionConflictError) {
+          return reply.status(409).send({
+            error: {
+              code: 'WORKFLOW_VERSION_CONFLICT',
+              message: error.message,
+              expectedVersion: error.expectedVersion,
+              actualVersion: error.actualVersion,
+            },
+          });
+        }
+        if (error instanceof InvalidOperatorActionError) {
+          return reply.status(409).send({
+            error: {
+              code: 'OPERATOR_ACTION_CONFLICT',
+              message: error.message,
+              action: error.action,
+              workflowStatus: error.status,
+            },
+          });
+        }
+        throw error;
+      }
+    });
+  }
 }
 
 function orderPayload(order: z.infer<typeof ecommerceWorkflowSchema>) {

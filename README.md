@@ -36,7 +36,8 @@ The worker ownership protocol is explained in
 [saga compensation](docs/compensation.md). The operator experience is covered in
 [the dashboard guide](docs/dashboard.md), and the reliability proof is documented in
 [chaos and recovery testing](docs/chaos-testing.md). Production operations are covered by
-[the deployment and operations runbook](docs/production.md).
+[the deployment and operations runbook](docs/production.md), including
+[authenticated operator recovery](docs/operator-controls.md).
 
 ## Repository structure
 
@@ -122,12 +123,3 @@ migrations, and launch the development processes:
 npm run db:migrate
 npm run dev
 ```
-
-## Current milestone
-
-Phase 9 provides a production-ready runtime and deployment handoff. API liveness is independent from
-PostgreSQL, readiness verifies the required schema, and API/worker shutdown is bounded and
-lease-safe. Token-protected Prometheus metrics expose HTTP and durable workflow health. Separate
-minimal service and dashboard images run as non-root with production dependencies only. Compose and
-Kubernetes deployments use read-only filesystems, dropped capabilities, resource limits, probes,
-external secrets, managed PostgreSQL, and migration jobs. CI builds and smoke-tests both images.

@@ -9,6 +9,7 @@ introduced in later phases must use the same rules.
 stateDiagram-v2
     [*] --> pending
     pending --> running
+    pending --> canceled
     running --> completed
     running --> compensating
     running --> failed
@@ -18,6 +19,7 @@ stateDiagram-v2
     failed --> [*]
     compensated --> [*]
     compensation_failed --> [*]
+    canceled --> [*]
 ```
 
 | State                 | Meaning                                                                       |
@@ -29,8 +31,10 @@ stateDiagram-v2
 | `failed`              | The workflow failed and no completed reversible action requires compensation. |
 | `compensated`         | All required reverse actions completed.                                       |
 | `compensation_failed` | At least one reverse action exhausted its retry policy.                       |
+| `canceled`            | An operator canceled the workflow before any task started.                    |
 
-All states except `pending`, `running`, and `compensating` are terminal.
+All states except `pending`, `running`, and `compensating` are terminal for ordinary worker
+execution. Explicit operator retries follow the additional guarded rules below.
 
 ## Task states
 
@@ -38,7 +42,9 @@ All states except `pending`, `running`, and `compensating` are terminal.
 stateDiagram-v2
     [*] --> blocked
     blocked --> ready
+    blocked --> canceled
     ready --> leased
+    ready --> canceled
     leased --> completed
     leased --> retry_scheduled
     leased --> failed
@@ -47,6 +53,7 @@ stateDiagram-v2
     compensating --> leased
     leased --> compensated
     leased --> compensation_failed
+    canceled --> [*]
 ```
 
 | State                 | Meaning                                                   |
@@ -60,6 +67,7 @@ stateDiagram-v2
 | `compensating`        | The reverse action is eligible to be leased.              |
 | `compensated`         | The reverse action completed.                             |
 | `compensation_failed` | The reverse action exhausted retries.                     |
+| `canceled`            | The task was canceled before workflow execution started.  |
 
 ## Transition invariants
 
@@ -71,6 +79,11 @@ stateDiagram-v2
 6. A terminal forward failure prevents later forward steps from becoming ready.
 7. Compensation runs only for completed reversible steps, in reverse order.
 8. Every accepted transition appends an event within the same transaction.
+
+Terminal recovery transitions are not part of the ordinary worker state machine. The guarded
+operator command path may move `failed → running` or `compensation_failed → compensating` only after
+checking authentication, the expected workflow version, the exact terminal task shape, and an audit
+reason. It adds one attempt and advances the task generation before work becomes claimable again.
 
 ## Event history
 

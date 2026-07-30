@@ -35,6 +35,7 @@ const taskEventStatuses: Readonly<Record<string, TaskStatus | undefined>> = {
   'task.compensation_retried': 'leased',
   'task.compensated': 'compensated',
   'task.compensation_failed': 'compensation_failed',
+  'task.canceled': 'canceled',
 };
 
 export function verifyWorkflowHistory(input: VerifyWorkflowHistoryInput): WorkflowHistoryReport {

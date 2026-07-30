@@ -19,7 +19,8 @@ type WorkflowStatus =
   | 'completed'
   | 'failed'
   | 'compensated'
-  | 'compensation_failed';
+  | 'compensation_failed'
+  | 'canceled';
 
 type TaskStatus =
   | 'blocked'
@@ -30,7 +31,8 @@ type TaskStatus =
   | 'failed'
   | 'compensating'
   | 'compensated'
-  | 'compensation_failed';
+  | 'compensation_failed'
+  | 'canceled';
 
 interface WorkflowDetail {
   workflow: {
@@ -86,6 +88,8 @@ interface HistoryIntegrityReport {
   issues: Array<{ code: string; message: string; sequence?: number; taskId?: string }>;
 }
 
+type OperatorAction = 'retry_failed_task' | 'retry_compensation' | 'cancel';
+
 const workflowLabels: Record<WorkflowStatus, string> = {
   pending: 'Pending',
   running: 'Running',
@@ -94,6 +98,7 @@ const workflowLabels: Record<WorkflowStatus, string> = {
   failed: 'Failed',
   compensated: 'Compensated',
   compensation_failed: 'Compensation failed',
+  canceled: 'Canceled',
 };
 
 const taskLabels: Record<TaskStatus, string> = {
@@ -106,6 +111,7 @@ const taskLabels: Record<TaskStatus, string> = {
   compensating: 'Compensating',
   compensated: 'Compensated',
   compensation_failed: 'Compensation failed',
+  canceled: 'Canceled',
 };
 
 export default function WorkflowDetailPage() {
@@ -299,6 +305,7 @@ function WorkflowDetailView({
       </section>
 
       <HistoryIntegrity report={historyReport} />
+      <OperatorControls workflow={workflow} onApplied={onRefresh} />
 
       <div className="detail-grid">
         <section className="execution-panel">
@@ -343,6 +350,157 @@ function WorkflowDetailView({
       </section>
     </div>
   );
+}
+
+function OperatorControls({
+  workflow,
+  onApplied,
+}: {
+  workflow: WorkflowDetail['workflow'];
+  onApplied: () => void;
+}) {
+  const action = operatorActionFor(workflow.status);
+  const [actor, setActor] = useState('');
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+
+  if (!action) {
+    return null;
+  }
+
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setMessage(null);
+    try {
+      const response = await fetch(
+        `/api/workflows/${encodeURIComponent(workflow.id)}/operator-actions`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: action.type,
+            actor,
+            reason,
+            expectedVersion: workflow.version,
+          }),
+        },
+      );
+      const body = (await response.json()) as {
+        error?: { message?: string };
+      };
+      if (!response.ok) {
+        throw new Error(body.error?.message ?? 'Operator action was rejected');
+      }
+      setReason('');
+      setMessage({ tone: 'success', text: `${action.pastTense} successfully.` });
+      onApplied();
+    } catch (cause) {
+      setMessage({
+        tone: 'error',
+        text: cause instanceof Error ? cause.message : 'Operator action failed',
+      });
+      onApplied();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="operator-panel" aria-labelledby="operator-controls-title">
+      <div>
+        <p className="eyebrow">Guarded operation</p>
+        <h2 id="operator-controls-title">{action.title}</h2>
+        <p>{action.description}</p>
+      </div>
+      <form onSubmit={(event) => void submit(event)}>
+        <label>
+          Operator ID
+          <input
+            autoComplete="username"
+            maxLength={120}
+            onChange={(event) => setActor(event.target.value)}
+            pattern="[a-zA-Z0-9][a-zA-Z0-9._@-]{0,119}"
+            placeholder="name@example.com"
+            required
+            value={actor}
+          />
+        </label>
+        <label>
+          Audit reason
+          <input
+            minLength={8}
+            maxLength={500}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder={action.reasonPlaceholder}
+            required
+            value={reason}
+          />
+        </label>
+        <button
+          className={action.type === 'cancel' ? 'operator-button danger' : 'operator-button'}
+          disabled={submitting}
+          type="submit"
+        >
+          {submitting ? 'Applying…' : action.button}
+        </button>
+      </form>
+      {message ? (
+        <p className={`operator-message ${message.tone}`} role="status">
+          {message.text}
+        </p>
+      ) : null}
+      <small>
+        Uses workflow version {workflow.version}. Concurrent changes are rejected and require a
+        refresh.
+      </small>
+    </section>
+  );
+}
+
+function operatorActionFor(status: WorkflowStatus): {
+  type: OperatorAction;
+  title: string;
+  description: string;
+  button: string;
+  pastTense: string;
+  reasonPlaceholder: string;
+} | null {
+  if (status === 'pending') {
+    return {
+      type: 'cancel',
+      title: 'Cancel queued workflow',
+      description:
+        'Cancellation is allowed only before execution starts. Every task and the workflow become terminal.',
+      button: 'Cancel workflow',
+      pastTense: 'Workflow canceled',
+      reasonPlaceholder: 'Why should this queued workflow be canceled?',
+    };
+  }
+  if (status === 'failed') {
+    return {
+      type: 'retry_failed_task',
+      title: 'Retry failed task',
+      description:
+        'Adds exactly one attempt, creates a new generation fence, and resumes durable execution.',
+      button: 'Retry task',
+      pastTense: 'Task queued for retry',
+      reasonPlaceholder: 'What changed to make a retry safe?',
+    };
+  }
+  if (status === 'compensation_failed') {
+    return {
+      type: 'retry_compensation',
+      title: 'Retry compensation',
+      description:
+        'Adds one compensation attempt and resumes reverse-order recovery under a new fence.',
+      button: 'Retry compensation',
+      pastTense: 'Compensation queued for retry',
+      reasonPlaceholder: 'What changed to make compensation safe?',
+    };
+  }
+  return null;
 }
 
 function HistoryIntegrity({ report }: { report: HistoryIntegrityReport | null }) {
@@ -466,7 +624,9 @@ function EventItem({
           {task ? `Step ${task.stepNumber} · ${task.name}` : 'Workflow'}
           <span> · #{event.sequence}</span>
         </p>
-        {event.data.workerId ? <code>{String(event.data.workerId)}</code> : null}
+        {event.data.workerId || event.data.actor ? (
+          <code>{String(event.data.workerId ?? event.data.actor)}</code>
+        ) : null}
       </div>
     </article>
   );

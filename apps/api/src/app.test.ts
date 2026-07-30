@@ -1,4 +1,5 @@
 import type { WorkflowDetail } from '@sentinel/contracts';
+import { InvalidOperatorActionError, WorkflowVersionConflictError } from '@sentinel/database';
 import { describe, expect, it, vi } from 'vitest';
 
 import { buildApp } from './app.js';
@@ -108,6 +109,7 @@ describe('API health endpoint', () => {
             workflows_failed: '0',
             workflows_compensated: '0',
             workflows_compensation_failed: '0',
+            workflows_canceled: '0',
             tasks_ready: '1',
             tasks_leased: '1',
             tasks_retry_scheduled: '0',
@@ -440,11 +442,139 @@ describe('workflow endpoints', () => {
     });
     await app.close();
   });
+
+  it('does not register operator controls without an operator token', async () => {
+    const detail = createWorkflowDetail();
+    const workflows = createWorkflowStore(detail);
+    const app = buildApp({
+      database: { query: vi.fn() },
+      workflows,
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/workflows/${detail.workflow.id}/operator-actions`,
+      payload: {
+        action: 'cancel',
+        reason: 'Customer canceled the order',
+        expectedVersion: 1,
+      },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(workflows.applyOperatorAction).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('authenticates and validates operator actions before applying them', async () => {
+    const detail = createWorkflowDetail();
+    const workflows = createWorkflowStore(detail);
+    const app = buildApp({
+      database: { query: vi.fn() },
+      workflows,
+      logger: false,
+      operatorToken: 'sentinel-operator-token-with-32-chars',
+    });
+    const payload = {
+      action: 'cancel',
+      reason: 'Customer canceled the order',
+      expectedVersion: 1,
+    };
+
+    const unauthorized = await app.inject({
+      method: 'POST',
+      url: `/workflows/${detail.workflow.id}/operator-actions`,
+      headers: {
+        authorization: 'Bearer wrong-token',
+        'x-operator-id': 'operator@example.com',
+      },
+      payload,
+    });
+    const invalidIdentity = await app.inject({
+      method: 'POST',
+      url: `/workflows/${detail.workflow.id}/operator-actions`,
+      headers: {
+        authorization: 'Bearer sentinel-operator-token-with-32-chars',
+        'x-operator-id': 'not a stable identity',
+      },
+      payload,
+    });
+    const accepted = await app.inject({
+      method: 'POST',
+      url: `/workflows/${detail.workflow.id}/operator-actions`,
+      headers: {
+        authorization: 'Bearer sentinel-operator-token-with-32-chars',
+        'x-operator-id': 'operator@example.com',
+      },
+      payload,
+    });
+
+    expect(unauthorized.statusCode).toBe(401);
+    expect(invalidIdentity.statusCode).toBe(400);
+    expect(accepted.statusCode).toBe(200);
+    expect(workflows.applyOperatorAction).toHaveBeenCalledOnce();
+    expect(workflows.applyOperatorAction).toHaveBeenCalledWith({
+      workflowId: detail.workflow.id,
+      actor: 'operator@example.com',
+      ...payload,
+    });
+    await app.close();
+  });
+
+  it('returns actionable conflicts for stale or unsafe operator commands', async () => {
+    const detail = createWorkflowDetail();
+    const workflows = createWorkflowStore(detail);
+    const app = buildApp({
+      database: { query: vi.fn() },
+      workflows,
+      logger: false,
+      operatorToken: 'sentinel-operator-token-with-32-chars',
+    });
+    const request = {
+      method: 'POST' as const,
+      url: `/workflows/${detail.workflow.id}/operator-actions`,
+      headers: {
+        authorization: 'Bearer sentinel-operator-token-with-32-chars',
+        'x-operator-id': 'operator@example.com',
+      },
+      payload: {
+        action: 'cancel',
+        reason: 'Customer canceled the order',
+        expectedVersion: 1,
+      },
+    };
+
+    workflows.applyOperatorAction.mockRejectedValueOnce(new WorkflowVersionConflictError(1, 2));
+    const stale = await app.inject(request);
+    workflows.applyOperatorAction.mockRejectedValueOnce(
+      new InvalidOperatorActionError('cancel', 'running', 'Only pending workflows can be canceled'),
+    );
+    const unsafe = await app.inject(request);
+
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({
+      error: {
+        code: 'WORKFLOW_VERSION_CONFLICT',
+        expectedVersion: 1,
+        actualVersion: 2,
+      },
+    });
+    expect(unsafe.statusCode).toBe(409);
+    expect(unsafe.json()).toMatchObject({
+      error: {
+        code: 'OPERATOR_ACTION_CONFLICT',
+        workflowStatus: 'running',
+      },
+    });
+    await app.close();
+  });
 });
 
 function createWorkflowStore(detail: WorkflowDetail | null = null) {
   return {
     createWorkflow: vi.fn().mockResolvedValue(detail ?? createWorkflowDetail()),
+    applyOperatorAction: vi.fn().mockResolvedValue(detail),
     getWorkflow: vi.fn().mockResolvedValue(detail),
     listWorkflows: vi.fn().mockResolvedValue([]),
     verifyWorkflowHistory: vi.fn().mockResolvedValue(null),

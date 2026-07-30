@@ -17,7 +17,8 @@ type WorkflowStatus =
   | 'completed'
   | 'failed'
   | 'compensated'
-  | 'compensation_failed';
+  | 'compensation_failed'
+  | 'canceled';
 
 interface WorkflowSummary {
   workflow: {
@@ -44,6 +45,7 @@ const statusFilters: Array<{ label: string; value: 'all' | WorkflowStatus }> = [
   { label: 'Failed', value: 'failed' },
   { label: 'Completed', value: 'completed' },
   { label: 'Compensated', value: 'compensated' },
+  { label: 'Canceled', value: 'canceled' },
 ];
 
 const statusLabels: Record<WorkflowStatus, string> = {
@@ -54,6 +56,7 @@ const statusLabels: Record<WorkflowStatus, string> = {
   failed: 'Failed',
   compensated: 'Compensated',
   compensation_failed: 'Compensation failed',
+  canceled: 'Canceled',
 };
 
 export default function Home() {

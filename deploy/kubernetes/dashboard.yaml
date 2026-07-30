@@ -33,6 +33,11 @@ spec:
           env:
             - name: SENTINEL_API_URL
               value: http://sentinel-api:4000
+            - name: OPERATOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sentinel-secrets
+                  key: OPERATOR_TOKEN
           readinessProbe:
             httpGet:
               path: /

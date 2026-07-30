@@ -16,6 +16,7 @@ interface BuildAppOptions {
   requestTimeoutMs?: number;
   keepAliveTimeoutMs?: number;
   metricsToken?: string | undefined;
+  operatorToken?: string | undefined;
 }
 
 const readinessQuery = `
@@ -27,7 +28,7 @@ const readinessQuery = `
     AND EXISTS (
       SELECT 1
       FROM schema_migrations
-      WHERE name = '005_compensation.sql'
+      WHERE name = '006_operator_controls.sql'
     ) AS schema_ready
 `;
 
@@ -40,6 +41,7 @@ export function buildApp({
   requestTimeoutMs = 30_000,
   keepAliveTimeoutMs = 72_000,
   metricsToken,
+  operatorToken,
 }: BuildAppOptions): FastifyInstance {
   const app = Fastify({
     logger,
@@ -62,7 +64,7 @@ export function buildApp({
 
   app.get('/', async () => ({
     name: 'Sentinel API',
-    phase: 9,
+    phase: 10,
     status: 'running',
   }));
 
@@ -143,7 +145,7 @@ export function buildApp({
     });
   }
 
-  registerWorkflowRoutes(app, workflows, { chaosEnabled });
+  registerWorkflowRoutes(app, workflows, { chaosEnabled, operatorToken });
 
   return app;
 }

@@ -19,6 +19,7 @@ const operationalMetricsQuery = `
     (SELECT count(*) FROM workflows WHERE status = 'compensated') AS workflows_compensated,
     (SELECT count(*) FROM workflows WHERE status = 'compensation_failed')
       AS workflows_compensation_failed,
+    (SELECT count(*) FROM workflows WHERE status = 'canceled') AS workflows_canceled,
     (SELECT count(*) FROM tasks WHERE status = 'ready') AS tasks_ready,
     (SELECT count(*) FROM tasks WHERE status = 'leased') AS tasks_leased,
     (SELECT count(*) FROM tasks WHERE status = 'retry_scheduled') AS tasks_retry_scheduled,
@@ -37,6 +38,7 @@ const workflowStatuses = [
   'failed',
   'compensated',
   'compensation_failed',
+  'canceled',
 ] as const;
 
 export class ApiMetrics {
