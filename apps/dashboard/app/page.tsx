@@ -2,6 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import {
+  calculateProgress,
+  formatDate,
+  formatRelativeTime,
+  initials,
+  shortenId,
+} from './dashboard-helpers';
+
 type WorkflowStatus =
   | 'pending'
   | 'running'
@@ -308,10 +316,7 @@ function MetricCard({
 
 function WorkflowRow({ summary }: { summary: WorkflowSummary }) {
   const { workflow } = summary;
-  const progress =
-    summary.taskCount === 0
-      ? 0
-      : Math.round((summary.completedTaskCount / summary.taskCount) * 100);
+  const progress = calculateProgress(summary.completedTaskCount, summary.taskCount);
   const orderId = workflow.payload.orderId;
 
   return (
@@ -401,33 +406,4 @@ function EmptyState({
       ) : null}
     </div>
   );
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join('')
-    .toUpperCase();
-}
-
-function shortenId(id: string): string {
-  return `${id.slice(0, 8)}…${id.slice(-4)}`;
-}
-
-function formatDate(value: string): string {
-  const date = new Date(value);
-  const elapsed = Date.now() - date.getTime();
-  const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 1) return 'Just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-function formatRelativeTime(value: Date): string {
-  const seconds = Math.max(0, Math.round((Date.now() - value.getTime()) / 1000));
-  return seconds < 5 ? 'just now' : `${seconds}s ago`;
 }

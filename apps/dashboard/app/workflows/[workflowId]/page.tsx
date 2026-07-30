@@ -3,6 +3,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 
+import {
+  durationLabel,
+  eventPresentation,
+  formatPayloadValue,
+  formatTimestamp,
+  humanize,
+  shortenId,
+} from '../../dashboard-helpers';
+
 type WorkflowStatus =
   | 'pending'
   | 'running'
@@ -454,72 +463,4 @@ function DetailLoading() {
       </div>
     </DetailShell>
   );
-}
-
-function eventPresentation(eventType: string): {
-  title: string;
-  symbol: string;
-  tone: 'neutral' | 'success' | 'warning' | 'danger' | 'violet';
-} {
-  if (eventType.includes('compensation')) {
-    if (eventType.includes('failed')) {
-      return { title: 'Compensation failed', symbol: '!', tone: 'danger' };
-    }
-    if (eventType.includes('retried')) {
-      return { title: 'Compensation retried', symbol: '↻', tone: 'warning' };
-    }
-    if (eventType.includes('ready')) {
-      return { title: 'Compensation activated', symbol: '↶', tone: 'violet' };
-    }
-    return { title: humanize(eventType.split('.')[1] ?? eventType), symbol: '↶', tone: 'violet' };
-  }
-  if (eventType === 'task.failed') {
-    return { title: 'Task failed', symbol: '!', tone: 'danger' };
-  }
-  if (eventType === 'task.retry_scheduled' || eventType === 'task.retried') {
-    return { title: humanize(eventType.split('.')[1] ?? eventType), symbol: '↻', tone: 'warning' };
-  }
-  if (eventType === 'task.completed') {
-    return { title: 'Task completed', symbol: '✓', tone: 'success' };
-  }
-  if (eventType === 'workflow.status_changed') {
-    return { title: 'Workflow status changed', symbol: '◇', tone: 'neutral' };
-  }
-  return { title: humanize(eventType.replace('.', ' ')), symbol: '·', tone: 'neutral' };
-}
-
-function durationLabel(startValue: string, endValue: string | null): string {
-  const start = new Date(startValue).getTime();
-  const end = endValue ? new Date(endValue).getTime() : Date.now();
-  const seconds = Math.max(0, Math.round((end - start) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
-}
-
-function formatTimestamp(value: string): string {
-  return new Date(value).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
-
-function humanize(value: string): string {
-  const words = value.replaceAll('_', ' ').replaceAll('-', ' ');
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-function formatPayloadValue(value: unknown): string {
-  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? '' : 's'}`;
-  if (typeof value === 'object' && value !== null) return JSON.stringify(value);
-  return String(value);
-}
-
-function shortenId(id: string): string {
-  return `${id.slice(0, 8)}…${id.slice(-4)}`;
 }
