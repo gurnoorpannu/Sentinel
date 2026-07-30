@@ -18,4 +18,9 @@ describe('worker lease configuration', () => {
       }),
     ).toThrow();
   });
+
+  it('keeps chaos endpoints disabled unless explicitly enabled', () => {
+    expect(loadEnvironment({}).CHAOS_MODE_ENABLED).toBe(false);
+    expect(loadEnvironment({ CHAOS_MODE_ENABLED: 'true' }).CHAOS_MODE_ENABLED).toBe(true);
+  });
 });

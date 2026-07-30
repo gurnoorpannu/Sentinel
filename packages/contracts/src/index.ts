@@ -24,6 +24,16 @@ export const taskStatuses = [
 
 export type TaskStatus = (typeof taskStatuses)[number];
 
+export const failureInjectionModes = [
+  'retryable',
+  'permanent',
+  'hang',
+  'crash_before_effect',
+  'crash_after_effect',
+] as const;
+
+export type FailureInjectionMode = (typeof failureInjectionModes)[number];
+
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };

@@ -1,18 +1,14 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
-import type { JsonObject, JsonValue, Task } from '@sentinel/contracts';
+import {
+  failureInjectionModes,
+  type FailureInjectionMode,
+  type JsonObject,
+  type JsonValue,
+  type Task,
+} from '@sentinel/contracts';
 
 import { RetryableTaskError } from './retry-policy.js';
-
-export const failureInjectionModes = [
-  'retryable',
-  'permanent',
-  'hang',
-  'crash_before_effect',
-  'crash_after_effect',
-] as const;
-
-export type FailureInjectionMode = (typeof failureInjectionModes)[number];
 
 export interface FailureInjectionPlan {
   mode: FailureInjectionMode;

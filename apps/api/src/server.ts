@@ -10,6 +10,7 @@ const app = buildApp({
   database,
   workflows,
   logger: { level: environment.LOG_LEVEL },
+  chaosEnabled: environment.CHAOS_MODE_ENABLED,
 });
 
 app.addHook('onClose', async () => {

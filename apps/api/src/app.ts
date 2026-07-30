@@ -10,9 +10,15 @@ interface BuildAppOptions {
   database: DatabaseProbe;
   workflows: WorkflowStore;
   logger?: boolean | { level: string };
+  chaosEnabled?: boolean;
 }
 
-export function buildApp({ database, workflows, logger = true }: BuildAppOptions): FastifyInstance {
+export function buildApp({
+  database,
+  workflows,
+  logger = true,
+  chaosEnabled = false,
+}: BuildAppOptions): FastifyInstance {
   const app = Fastify({ logger });
 
   app.get('/', async () => ({
@@ -39,7 +45,7 @@ export function buildApp({ database, workflows, logger = true }: BuildAppOptions
     }
   });
 
-  registerWorkflowRoutes(app, workflows);
+  registerWorkflowRoutes(app, workflows, { chaosEnabled });
 
   return app;
 }

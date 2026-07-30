@@ -132,6 +132,76 @@ describe('workflow endpoints', () => {
     await app.close();
   });
 
+  it('creates a typed failure-injected workflow only when chaos mode is enabled', async () => {
+    const detail = createWorkflowDetail();
+    const workflows = createWorkflowStore(detail);
+    const app = buildApp({
+      database: { query: vi.fn().mockResolvedValue({}) },
+      workflows,
+      logger: false,
+      chaosEnabled: true,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workflows/ecommerce/chaos',
+      payload: {
+        orderId: 'order-chaos',
+        customerEmail: 'buyer@example.com',
+        totalCents: 4200,
+        currency: 'USD',
+        items: [{ sku: 'sentinel-shirt', quantity: 1 }],
+        failure: {
+          target: 'reserve-inventory',
+          mode: 'retryable',
+          attempts: 2,
+          maxAttempts: 3,
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(workflows.createWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Chaos order order-chaos',
+        payload: expect.objectContaining({
+          chaosTarget: 'reserve-inventory',
+          chaosMode: 'retryable',
+        }),
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            handler: 'reserve-inventory',
+            payload: expect.objectContaining({
+              sentinelFailure: {
+                mode: 'retryable',
+                attempts: 2,
+                delayMs: 0,
+              },
+            }),
+          }),
+        ]),
+      }),
+    );
+    await app.close();
+  });
+
+  it('does not expose the chaos workflow endpoint by default', async () => {
+    const app = buildApp({
+      database: { query: vi.fn().mockResolvedValue({}) },
+      workflows: createWorkflowStore(),
+      logger: false,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workflows/ecommerce/chaos',
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(404);
+    await app.close();
+  });
+
   it('returns a workflow with ordered tasks and events', async () => {
     const detail = createWorkflowDetail();
     const workflows = createWorkflowStore(detail);

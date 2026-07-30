@@ -1,4 +1,5 @@
 import {
+  failureInjectionModes,
   workflowStatuses,
   type CreateWorkflowInput,
   type WorkflowDetail,
@@ -63,7 +64,21 @@ const ecommerceWorkflowSchema = z.object({
     .max(100),
 });
 
-export function registerWorkflowRoutes(app: FastifyInstance, workflows: WorkflowStore): void {
+const chaosWorkflowSchema = ecommerceWorkflowSchema.extend({
+  failure: z.object({
+    target: z.enum(['charge-payment', 'reserve-inventory', 'send-confirmation']),
+    mode: z.enum(failureInjectionModes),
+    attempts: z.number().int().min(1).max(10).default(1),
+    maxAttempts: z.number().int().min(1).max(10).default(3),
+    delayMs: z.number().int().min(0).max(300_000).optional(),
+  }),
+});
+
+export function registerWorkflowRoutes(
+  app: FastifyInstance,
+  workflows: WorkflowStore,
+  options: { chaosEnabled?: boolean } = {},
+): void {
   app.get('/workflows', async (request, reply) => {
     const query = listWorkflowsQuerySchema.safeParse(request.query);
     if (!query.success) {
@@ -120,6 +135,55 @@ export function registerWorkflowRoutes(app: FastifyInstance, workflows: Workflow
       throw error;
     }
   });
+
+  if (options.chaosEnabled) {
+    app.post('/workflows/ecommerce/chaos', async (request, reply) => {
+      try {
+        const input = chaosWorkflowSchema.parse(request.body);
+        const payload = orderPayload(input);
+        const failure = {
+          mode: input.failure.mode,
+          attempts: input.failure.attempts,
+          delayMs: input.failure.delayMs ?? (input.failure.mode === 'hang' ? 45_000 : 0),
+        };
+        const withFailure = (handler: string) =>
+          handler === input.failure.target ? { ...payload, sentinelFailure: failure } : payload;
+        const detail = await workflows.createWorkflow({
+          name: `Chaos order ${input.orderId}`,
+          payload: { ...payload, chaosTarget: input.failure.target, chaosMode: input.failure.mode },
+          steps: [
+            { name: 'Validate order', handler: 'validate-order', payload },
+            {
+              name: 'Charge payment',
+              handler: 'charge-payment',
+              compensationHandler: 'refund-payment',
+              payload: withFailure('charge-payment'),
+              maxAttempts: input.failure.maxAttempts,
+            },
+            {
+              name: 'Reserve inventory',
+              handler: 'reserve-inventory',
+              compensationHandler: 'release-inventory',
+              payload: withFailure('reserve-inventory'),
+              maxAttempts: input.failure.maxAttempts,
+            },
+            {
+              name: 'Send confirmation',
+              handler: 'send-confirmation',
+              payload: withFailure('send-confirmation'),
+              maxAttempts: input.failure.maxAttempts,
+            },
+          ],
+        });
+        return sendCreatedWorkflow(reply, detail);
+      } catch (error) {
+        if (error instanceof ZodError || error instanceof InvalidWorkflowDefinitionError) {
+          return sendInvalidWorkflow(reply, error);
+        }
+        throw error;
+      }
+    });
+  }
 
   app.post('/workflows', async (request, reply) => {
     try {
@@ -182,6 +246,16 @@ export function registerWorkflowRoutes(app: FastifyInstance, workflows: Workflow
 
     return report;
   });
+}
+
+function orderPayload(order: z.infer<typeof ecommerceWorkflowSchema>) {
+  return {
+    orderId: order.orderId,
+    customerEmail: order.customerEmail,
+    totalCents: order.totalCents,
+    currency: order.currency,
+    items: order.items,
+  };
 }
 
 function sendCreatedWorkflow(reply: FastifyReply, detail: WorkflowDetail) {
