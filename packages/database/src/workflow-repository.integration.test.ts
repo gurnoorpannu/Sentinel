@@ -1,7 +1,12 @@
 import type { JsonObject } from '@sentinel/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { createDatabasePool, type Pool } from './index.js';
+import {
+  createDatabasePool,
+  IdempotencyConflictError,
+  IdempotencyRepository,
+  type Pool,
+} from './index.js';
 import { runMigrations } from './migrations.js';
 import { InvalidStateTransitionError, WorkflowRepository } from './workflow-repository.js';
 
@@ -11,6 +16,7 @@ const describeWithDatabase = testDatabaseUrl ? describe : describe.skip;
 describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
   let pool: Pool;
   let repository: WorkflowRepository;
+  let idempotency: IdempotencyRepository;
 
   beforeAll(async () => {
     if (!testDatabaseUrl) {
@@ -20,10 +26,13 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
     await runMigrations({ connectionString: testDatabaseUrl });
     pool = createDatabasePool(testDatabaseUrl);
     repository = new WorkflowRepository(pool);
+    idempotency = new IdempotencyRepository(pool);
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE workflow_events, tasks, workflows RESTART IDENTITY CASCADE');
+    await pool.query(
+      'TRUNCATE idempotency_records, workflow_events, tasks, workflows RESTART IDENTITY CASCADE',
+    );
   });
 
   afterAll(async () => {
@@ -320,6 +329,8 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
       workerId: 'worker-a',
       generation: claimed!.generation,
       error: { code: 'DEMO_FAILURE', retryable: false },
+      retryable: false,
+      retryDelayMs: 1_000,
     });
 
     expect(failed).toMatchObject({
@@ -338,6 +349,100 @@ describeWithDatabase('WorkflowRepository with PostgreSQL', () => {
     ).resolves.toBeNull();
 
     const reloaded = await repository.getWorkflow(created.workflow.id);
-    expect(reloaded?.events.at(-1)?.eventType).toBe('task.failed');
+    expect(reloaded?.workflow.status).toBe('failed');
+    expect(reloaded?.events.some(({ eventType }) => eventType === 'task.failed')).toBe(true);
+  });
+
+  it('schedules exponential retries until the attempt ceiling', async () => {
+    const created = await repository.createWorkflow({
+      name: 'Retry test',
+      steps: [{ name: 'Flaky step', maxAttempts: 2 }],
+    });
+    const first = await repository.claimTask({
+      workerId: 'worker-a',
+      leaseDurationMs: 30_000,
+    });
+
+    const scheduled = await repository.failTask({
+      taskId: first!.id,
+      workerId: 'worker-a',
+      generation: first!.generation,
+      error: { code: 'TIMEOUT' },
+      retryable: true,
+      retryDelayMs: 60_000,
+    });
+    expect(scheduled).toMatchObject({
+      status: 'retry_scheduled',
+      attemptCount: 1,
+      leaseOwner: null,
+    });
+    expect(scheduled?.nextAttemptAt).toBeInstanceOf(Date);
+    await expect(
+      repository.claimTask({ workerId: 'too-early', leaseDurationMs: 30_000 }),
+    ).resolves.toBeNull();
+
+    await pool.query(
+      "UPDATE tasks SET next_attempt_at = now() - interval '1 second' WHERE id = $1",
+      [first!.id],
+    );
+    const second = await repository.claimTask({
+      workerId: 'worker-b',
+      leaseDurationMs: 30_000,
+    });
+    expect(second).toMatchObject({ generation: 2, attemptCount: 2, status: 'leased' });
+
+    const exhausted = await repository.failTask({
+      taskId: second!.id,
+      workerId: 'worker-b',
+      generation: second!.generation,
+      error: { code: 'TIMEOUT' },
+      retryable: true,
+      retryDelayMs: 120_000,
+    });
+    expect(exhausted).toMatchObject({ status: 'failed', attemptCount: 2 });
+
+    const reloaded = await repository.getWorkflow(created.workflow.id);
+    expect(reloaded?.workflow.status).toBe('failed');
+    expect(reloaded?.events.map(({ eventType }) => eventType)).toEqual(
+      expect.arrayContaining(['task.retry_scheduled', 'task.retried', 'task.failed']),
+    );
+  });
+
+  it('executes a concurrent idempotent effect only once', async () => {
+    let executions = 0;
+    const execute = () =>
+      idempotency.execute({
+        key: 'workflow-1:2:charge-payment',
+        operation: 'charge-payment',
+        request: { orderId: 'order-42', totalCents: 1299 },
+        produce: async () => {
+          executions += 1;
+          return { chargeId: 'charge-order-42' };
+        },
+      });
+
+    const outcomes = await Promise.all([execute(), execute()]);
+
+    expect(executions).toBe(1);
+    expect(outcomes.map(({ replayed }) => replayed).sort()).toEqual([false, true]);
+    expect(outcomes[0]?.response).toEqual(outcomes[1]?.response);
+  });
+
+  it('rejects an idempotency key reused with a different request', async () => {
+    await idempotency.execute({
+      key: 'workflow-1:2:charge-payment',
+      operation: 'charge-payment',
+      request: { totalCents: 1299 },
+      produce: async () => ({ chargeId: 'charge-order-42' }),
+    });
+
+    await expect(
+      idempotency.execute({
+        key: 'workflow-1:2:charge-payment',
+        operation: 'charge-payment',
+        request: { totalCents: 9999 },
+        produce: async () => ({ chargeId: 'should-not-run' }),
+      }),
+    ).rejects.toBeInstanceOf(IdempotencyConflictError);
   });
 });

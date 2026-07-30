@@ -3,9 +3,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { JsonObject, JsonValue, Task } from '@sentinel/contracts';
 import type { WorkflowRepository } from '@sentinel/database';
 
+import { calculateBackoff, type RetryPolicy } from './retry-policy.js';
+
 type LeaseStore = Pick<WorkflowRepository, 'renewLease' | 'completeTask' | 'failTask'>;
 
-export type LeaseExecutionOutcome = 'completed' | 'failed' | 'fenced';
+export type LeaseExecutionOutcome = 'completed' | 'retry_scheduled' | 'failed' | 'fenced';
 
 interface ExecuteLeasedTaskOptions {
   repository: LeaseStore;
@@ -15,6 +17,8 @@ interface ExecuteLeasedTaskOptions {
   heartbeatIntervalMs: number;
   execute: (task: Task) => Promise<JsonValue>;
   onHeartbeatError?: (error: unknown) => void;
+  retryPolicy?: RetryPolicy;
+  isRetryable?: (error: unknown) => boolean;
 }
 
 export async function executeLeasedTask({
@@ -25,6 +29,12 @@ export async function executeLeasedTask({
   heartbeatIntervalMs,
   execute,
   onHeartbeatError,
+  retryPolicy = {
+    baseDelayMs: 1_000,
+    maxDelayMs: 30_000,
+    jitterRatio: 0.2,
+  },
+  isRetryable = () => false,
 }: ExecuteLeasedTaskOptions): Promise<LeaseExecutionOutcome> {
   const heartbeatController = new AbortController();
   const heartbeat = maintainLease({
@@ -61,8 +71,10 @@ export async function executeLeasedTask({
       workerId,
       generation: task.generation,
       error: serializeError(executionError),
+      retryable: isRetryable(executionError),
+      retryDelayMs: calculateBackoff(task.attemptCount, retryPolicy),
     });
-    return failed ? 'failed' : 'fenced';
+    return failed ? (failed.status === 'retry_scheduled' ? 'retry_scheduled' : 'failed') : 'fenced';
   }
 
   const completed = await repository.completeTask({

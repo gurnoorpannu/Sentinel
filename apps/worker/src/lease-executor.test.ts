@@ -106,8 +106,41 @@ describe('lease-aware task execution', () => {
         name: 'Error',
         message: 'downstream unavailable',
       },
+      retryable: false,
+      retryDelayMs: expect.any(Number),
     });
     expect(repository.completeTask).not.toHaveBeenCalled();
+  });
+
+  it('schedules retryable errors with exponential backoff', async () => {
+    const task = { ...createLeasedTask(), attemptCount: 2 };
+    const repository = createRepository(task);
+    repository.failTask.mockResolvedValue({ ...task, status: 'retry_scheduled' });
+
+    const outcome = await executeLeasedTask({
+      repository,
+      task,
+      workerId: 'worker-a',
+      leaseDurationMs: 30_000,
+      heartbeatIntervalMs: 10_000,
+      execute: async () => {
+        throw new Error('temporary timeout');
+      },
+      isRetryable: () => true,
+      retryPolicy: {
+        baseDelayMs: 1_000,
+        maxDelayMs: 30_000,
+        jitterRatio: 0,
+      },
+    });
+
+    expect(outcome).toBe('retry_scheduled');
+    expect(repository.failTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        retryable: true,
+        retryDelayMs: 2_000,
+      }),
+    );
   });
 });
 

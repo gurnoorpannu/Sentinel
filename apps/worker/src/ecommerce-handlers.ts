@@ -15,7 +15,18 @@ interface EcommerceOrder {
   items: OrderItem[];
 }
 
-export function createDefaultHandlerRegistry(): HandlerRegistry {
+export interface IdempotencyExecutor {
+  execute(input: {
+    key: string;
+    operation: string;
+    request: JsonObject;
+    produce: () => Promise<JsonValue>;
+  }): Promise<{ response: JsonValue; replayed: boolean }>;
+}
+
+export function createDefaultHandlerRegistry(
+  idempotency: IdempotencyExecutor = new InMemoryIdempotencyExecutor(),
+): HandlerRegistry {
   return new HandlerRegistry()
     .register('noop', async (task) => ({
       acknowledged: true,
@@ -31,32 +42,70 @@ export function createDefaultHandlerRegistry(): HandlerRegistry {
     })
     .register('charge-payment', async (task) => {
       const order = parseOrder(task);
-      return {
+      return await executeIdempotently(idempotency, task, 'charge-payment', async () => ({
         chargeId: `charge-${order.orderId}`,
         orderId: order.orderId,
         amountCents: order.totalCents,
         currency: order.currency,
-      };
+      }));
     })
     .register('reserve-inventory', async (task) => {
       const order = parseOrder(task);
-      return {
+      return await executeIdempotently(idempotency, task, 'reserve-inventory', async () => ({
         reservationId: `reservation-${order.orderId}`,
         orderId: order.orderId,
         items: order.items.map((item) => ({
           sku: item.sku,
           quantity: item.quantity,
         })),
-      };
+      }));
     })
     .register('send-confirmation', async (task) => {
       const order = parseOrder(task);
-      return {
+      return await executeIdempotently(idempotency, task, 'send-confirmation', async () => ({
         confirmationId: `confirmation-${order.orderId}`,
         orderId: order.orderId,
         recipient: order.customerEmail,
-      };
+      }));
     });
+}
+
+class InMemoryIdempotencyExecutor implements IdempotencyExecutor {
+  private readonly records = new Map<string, { request: string; response: JsonValue }>();
+
+  async execute(input: {
+    key: string;
+    operation: string;
+    request: JsonObject;
+    produce: () => Promise<JsonValue>;
+  }): Promise<{ response: JsonValue; replayed: boolean }> {
+    const request = JSON.stringify(input.request);
+    const existing = this.records.get(input.key);
+    if (existing) {
+      if (existing.request !== request) {
+        throw new Error(`Idempotency key "${input.key}" request conflict`);
+      }
+      return { response: existing.response, replayed: true };
+    }
+    const response = await input.produce();
+    this.records.set(input.key, { request, response });
+    return { response, replayed: false };
+  }
+}
+
+async function executeIdempotently(
+  idempotency: IdempotencyExecutor,
+  task: Task,
+  operation: string,
+  produce: () => Promise<JsonValue>,
+): Promise<JsonValue> {
+  const outcome = await idempotency.execute({
+    key: `${task.workflowId}:${task.stepNumber}:${task.handler}`,
+    operation,
+    request: task.payload,
+    produce,
+  });
+  return outcome.response;
 }
 
 function parseOrder(task: Task): EcommerceOrder {

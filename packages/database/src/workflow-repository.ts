@@ -257,11 +257,15 @@ export class WorkflowRepository {
             AND (
               t.status = 'ready'
               OR (
+                t.status = 'retry_scheduled'
+                AND t.next_attempt_at <= now()
+              )
+              OR (
                 t.status = 'leased'
                 AND t.lease_expires_at <= now()
               )
             )
-          ORDER BY t.created_at, t.workflow_id, t.step_number
+          ORDER BY COALESCE(t.next_attempt_at, t.created_at), t.workflow_id, t.step_number
           FOR UPDATE OF t SKIP LOCKED
           LIMIT 1
         `,
@@ -303,6 +307,7 @@ export class WorkflowRepository {
             lease_expires_at = now() + ($3 * interval '1 millisecond'),
             generation = generation + 1,
             attempt_count = attempt_count + 1,
+            next_attempt_at = NULL,
             updated_at = now()
           WHERE id = $1
           RETURNING ${taskColumns}
@@ -314,7 +319,12 @@ export class WorkflowRepository {
       await appendEvent(client, {
         workflowId: task.workflow_id,
         taskId: task.id,
-        eventType: candidate.status === 'leased' ? 'task.reclaimed' : 'task.leased',
+        eventType:
+          candidate.status === 'leased'
+            ? 'task.reclaimed'
+            : candidate.status === 'retry_scheduled'
+              ? 'task.retried'
+              : 'task.leased',
         data: {
           workerId,
           generation: Number(task.generation),
@@ -404,15 +414,106 @@ export class WorkflowRepository {
     });
   }
 
-  async failTask({ taskId, workerId, generation, error }: FailTaskInput): Promise<Task | null> {
-    return await this.settleTask({
-      taskId,
-      workerId,
-      generation,
-      status: 'failed',
-      result: { error },
-      eventType: 'task.failed',
-    });
+  async failTask({
+    taskId,
+    workerId,
+    generation,
+    error,
+    retryable,
+    retryDelayMs,
+  }: FailTaskInput): Promise<Task | null> {
+    validateWorkerId(workerId);
+    validateGeneration(generation);
+    if (!Number.isInteger(retryDelayMs) || retryDelayMs < 0 || retryDelayMs > 3_600_000) {
+      throw new RangeError('retryDelayMs must be an integer between 0 and 3600000');
+    }
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      const taskResult = await client.query<TaskRow>(
+        `
+          UPDATE tasks
+          SET
+            status = CASE
+              WHEN $4 AND attempt_count < max_attempts THEN 'retry_scheduled'
+              ELSE 'failed'
+            END,
+            result = $5::jsonb,
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            next_attempt_at = CASE
+              WHEN $4 AND attempt_count < max_attempts
+                THEN now() + ($6 * interval '1 millisecond')
+              ELSE NULL
+            END,
+            updated_at = now(),
+            completed_at = CASE
+              WHEN $4 AND attempt_count < max_attempts THEN NULL
+              ELSE now()
+            END
+          WHERE
+            id = $1
+            AND status = 'leased'
+            AND lease_owner = $2
+            AND generation = $3
+            AND lease_expires_at > now()
+          RETURNING ${taskColumns}
+        `,
+        [taskId, workerId, generation, retryable, JSON.stringify({ error }), retryDelayMs],
+      );
+      const task = taskResult.rows[0];
+
+      if (!task) {
+        await client.query('COMMIT');
+        return null;
+      }
+
+      const retryScheduled = task.status === 'retry_scheduled';
+      await appendEvent(client, {
+        workflowId: task.workflow_id,
+        taskId: task.id,
+        eventType: retryScheduled ? 'task.retry_scheduled' : 'task.failed',
+        data: {
+          workerId,
+          generation,
+          error,
+          attemptCount: task.attempt_count,
+          maxAttempts: task.max_attempts,
+          retryDelayMs: retryScheduled ? retryDelayMs : null,
+        },
+      });
+
+      if (!retryScheduled) {
+        const failedWorkflow = await client.query(
+          `
+            UPDATE workflows
+            SET
+              status = 'failed',
+              version = version + 1,
+              updated_at = now(),
+              completed_at = now()
+            WHERE id = $1 AND status = 'running'
+          `,
+          [task.workflow_id],
+        );
+        if (failedWorkflow.rowCount === 1) {
+          await appendEvent(client, {
+            workflowId: task.workflow_id,
+            eventType: 'workflow.status_changed',
+            data: { from: 'running', to: 'failed' },
+          });
+        }
+      }
+
+      await client.query('COMMIT');
+      return mapTask(task);
+    } catch (failure) {
+      await client.query('ROLLBACK');
+      throw failure;
+    } finally {
+      client.release();
+    }
   }
 
   private async settleTask(input: {
