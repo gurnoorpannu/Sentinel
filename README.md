@@ -27,7 +27,8 @@ The complete design combines:
 - an append-only event history.
 
 See [the architecture guide](docs/architecture.md) and
-[the state-machine specification](docs/state-machines.md) for the Phase 1 design.
+[the state-machine specification](docs/state-machines.md) for the system design. Phase 2's tables,
+constraints, and transaction boundaries are described in [the durable data model](docs/database.md).
 
 ## Repository structure
 
@@ -81,6 +82,32 @@ The services will be available at:
 - API: `http://localhost:4000`
 - Database-aware health check: `http://localhost:4000/health`
 
+## Workflow API
+
+Create the demonstration workflow:
+
+```bash
+curl --request POST http://localhost:4000/workflows \
+  --header 'content-type: application/json' \
+  --data '{
+    "name": "Order fulfillment",
+    "payload": { "orderId": "order-42" },
+    "steps": [
+      { "name": "Validate order" },
+      { "name": "Charge payment", "maxAttempts": 3 },
+      { "name": "Reserve inventory" },
+      { "name": "Send confirmation" }
+    ]
+  }'
+```
+
+The response contains the workflow projection, ordered tasks, and immutable event history. Retrieve
+it later with:
+
+```bash
+curl http://localhost:4000/workflows/WORKFLOW_ID
+```
+
 To run the applications directly, start a PostgreSQL instance matching `DATABASE_URL`, apply the
 migrations, and launch the development processes:
 
@@ -91,7 +118,10 @@ npm run dev
 
 ## Current milestone
 
-Phase 1 establishes the runnable monorepo, service boundaries, database migration system, shared
-contracts, Compose environment, and the technical design that later phases will implement.
+Phase 2 provides the durable workflow, ordered-task, and append-only event model. Workflow creation
+and status retrieval are available through the API, with PostgreSQL integration tests proving
+transaction rollback, deterministic event order, state-transition validation, and concurrent
+transition serialization.
 
-Phase 2 will add the durable workflow, task, attempt, and event schema plus the first workflow APIs.
+Phase 3 will implement atomic task claiming, worker leases, heartbeats, lease recovery, and
+generation fencing.

@@ -24,6 +24,69 @@ export const taskStatuses = [
 
 export type TaskStatus = (typeof taskStatuses)[number];
 
+export type JsonPrimitive = boolean | number | string | null;
+export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+export type JsonObject = { [key: string]: JsonValue };
+
+export interface WorkflowStepDefinition {
+  name: string;
+  payload?: JsonObject;
+  maxAttempts?: number;
+}
+
+export interface CreateWorkflowInput {
+  name: string;
+  payload?: JsonObject;
+  steps: WorkflowStepDefinition[];
+}
+
+export interface Workflow {
+  id: string;
+  name: string;
+  status: WorkflowStatus;
+  payload: JsonObject;
+  version: number;
+  createdAt: Date;
+  updatedAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+}
+
+export interface Task {
+  id: string;
+  workflowId: string;
+  stepNumber: number;
+  name: string;
+  status: TaskStatus;
+  payload: JsonObject;
+  result: JsonValue | null;
+  maxAttempts: number;
+  attemptCount: number;
+  leaseOwner: string | null;
+  leaseExpiresAt: Date | null;
+  generation: number;
+  nextAttemptAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+}
+
+export interface WorkflowEvent {
+  id: string;
+  workflowId: string;
+  taskId: string | null;
+  sequence: number;
+  eventType: string;
+  data: JsonObject;
+  occurredAt: Date;
+}
+
+export interface WorkflowDetail {
+  workflow: Workflow;
+  tasks: Task[];
+  events: WorkflowEvent[];
+}
+
 export const workflowTransitions: Readonly<Record<WorkflowStatus, readonly WorkflowStatus[]>> = {
   pending: ['running'],
   running: ['completed', 'compensating', 'failed'],

@@ -1,60 +1,12 @@
-import { readFile, readdir } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-
 import { loadEnvironment } from '@sentinel/config';
-import pg from 'pg';
+import { runMigrations } from './migrations.js';
 
-const { Client } = pg;
+const environment = loadEnvironment();
 
-async function migrate(): Promise<void> {
-  const environment = loadEnvironment();
-  const client = new Client({ connectionString: environment.DATABASE_URL });
-  const migrationsDirectory = fileURLToPath(new URL('../migrations', import.meta.url));
-
-  await client.connect();
-
-  try {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        name text PRIMARY KEY,
-        applied_at timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-
-    const migrationFiles = (await readdir(migrationsDirectory))
-      .filter((file) => file.endsWith('.sql'))
-      .sort();
-
-    for (const migrationFile of migrationFiles) {
-      const existing = await client.query<{ name: string }>(
-        'SELECT name FROM schema_migrations WHERE name = $1',
-        [migrationFile],
-      );
-
-      if (existing.rowCount !== 0) {
-        continue;
-      }
-
-      const sql = await readFile(path.join(migrationsDirectory, migrationFile), 'utf8');
-
-      await client.query('BEGIN');
-      try {
-        await client.query(sql);
-        await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [migrationFile]);
-        await client.query('COMMIT');
-        process.stdout.write(`Applied migration ${migrationFile}\n`);
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
-    }
-  } finally {
-    await client.end();
-  }
-}
-
-migrate().catch((error: unknown) => {
+runMigrations({
+  connectionString: environment.DATABASE_URL,
+  onApplied: (migrationName) => process.stdout.write(`Applied migration ${migrationName}\n`),
+}).catch((error: unknown) => {
   process.stderr.write(`Migration failed: ${String(error)}\n`);
   process.exitCode = 1;
 });

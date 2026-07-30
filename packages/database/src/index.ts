@@ -1,5 +1,12 @@
 import { Pool } from 'pg';
 
+export {
+  InvalidStateTransitionError,
+  InvalidWorkflowDefinitionError,
+  WorkflowRepository,
+} from './workflow-repository.js';
+export { runMigrations } from './migrations.js';
+
 export function createDatabasePool(connectionString: string): Pool {
   return new Pool({
     connectionString,
