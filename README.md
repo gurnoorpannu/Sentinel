@@ -31,7 +31,8 @@ See [the architecture guide](docs/architecture.md) and
 constraints, and transaction boundaries are described in [the durable data model](docs/database.md).
 The worker ownership protocol is explained in
 [leasing and generation fencing](docs/leasing.md). Ordered execution is described in
-[sequential orchestration](docs/orchestration.md).
+[sequential orchestration](docs/orchestration.md). Failure recovery is covered in
+[retries and idempotency](docs/retries-and-idempotency.md).
 
 ## Repository structure
 
@@ -120,10 +121,9 @@ npm run dev
 
 ## Current milestone
 
-Phase 4 provides persisted handler identities, worker-side handler dispatch, transactional next-step
-activation, automatic workflow completion, and the full e-commerce demonstration workflow.
-PostgreSQL integration tests prove that the four handlers run strictly in order while competing
-workers cannot claim blocked steps.
+Phase 5 provides retry classification, exponential backoff with jitter, retry ceilings, and durable
+idempotency protection for external effects. PostgreSQL integration tests prove scheduled retries
+cannot run early, exhausted retries become terminal, concurrent duplicate calls execute once, and a
+payment result survives a worker crash before task completion.
 
-Phase 5 will add retry classification, exponential backoff with jitter, retry ceilings, and
-idempotency protection for external effects.
+Phase 6 will add reverse-order saga compensation for partially completed workflows.

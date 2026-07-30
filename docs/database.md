@@ -85,3 +85,9 @@ The schema rejects:
 
 Application validation gives clients useful errors, while these database constraints remain the
 last line of defense.
+
+### `idempotency_records`
+
+This table stores one simulated external effect per stable key, including its operation, request
+hash, and response. Advisory transaction locking prevents concurrent callers from executing the
+same effect twice.
