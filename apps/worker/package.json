@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@sentinel/config": "0.1.0",
+    "@sentinel/contracts": "0.1.0",
     "@sentinel/database": "0.1.0"
   }
 }
