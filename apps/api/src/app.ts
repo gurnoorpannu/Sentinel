@@ -1,20 +1,23 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 
+import { registerWorkflowRoutes, type WorkflowStore } from './workflow-routes.js';
+
 export interface DatabaseProbe {
   query(text: string): Promise<unknown>;
 }
 
 interface BuildAppOptions {
   database: DatabaseProbe;
+  workflows: WorkflowStore;
   logger?: boolean | { level: string };
 }
 
-export function buildApp({ database, logger = true }: BuildAppOptions): FastifyInstance {
+export function buildApp({ database, workflows, logger = true }: BuildAppOptions): FastifyInstance {
   const app = Fastify({ logger });
 
   app.get('/', async () => ({
     name: 'Sentinel API',
-    phase: 1,
+    phase: 2,
     status: 'running',
   }));
 
@@ -35,6 +38,8 @@ export function buildApp({ database, logger = true }: BuildAppOptions): FastifyI
       });
     }
   });
+
+  registerWorkflowRoutes(app, workflows);
 
   return app;
 }

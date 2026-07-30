@@ -1,12 +1,14 @@
 import { loadEnvironment } from '@sentinel/config';
-import { createDatabasePool } from '@sentinel/database';
+import { createDatabasePool, WorkflowRepository } from '@sentinel/database';
 
 import { buildApp } from './app.js';
 
 const environment = loadEnvironment();
 const database = createDatabasePool(environment.DATABASE_URL);
+const workflows = new WorkflowRepository(database);
 const app = buildApp({
   database,
+  workflows,
   logger: { level: environment.LOG_LEVEL },
 });
 
