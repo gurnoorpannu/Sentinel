@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ COPY . .
 RUN npm run build \
   && npm prune --omit=dev
 
-FROM node:22-alpine AS service
+FROM node:26-alpine AS service
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -40,7 +40,7 @@ EXPOSE 4000
 
 CMD ["node", "apps/api/dist/server.js"]
 
-FROM node:22-alpine AS dashboard
+FROM node:26-alpine AS dashboard
 
 WORKDIR /app
 ENV NODE_ENV=production
