@@ -19,9 +19,9 @@
   "dependencies": {
     "@sentinel/config": "0.1.0",
     "@sentinel/contracts": "0.1.0",
-    "pg": "^8.22.0"
+    "pg": "^8.23.0"
   },
   "devDependencies": {
-    "@types/pg": "^8.20.0"
+    "@types/pg": "^8.21.0"
   }
 }
