@@ -14,7 +14,7 @@
     "@sentinel/config": "0.1.0",
     "@sentinel/contracts": "0.1.0",
     "@sentinel/database": "0.1.0",
-    "fastify": "^5.11.0",
+    "fastify": "^5.11.3",
     "zod": "^4.4.3"
   }
 }
